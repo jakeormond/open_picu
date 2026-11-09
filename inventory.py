@@ -1,11 +1,17 @@
-#!/usr/bin/env python3
-"""Inventory the CSV files in a folder: structure, counts, ranges, missingness.
-Prints no row-level data. ID-like columns get counts only.
+"""Inventory the CSV files of one site: structure, counts, ranges, missingness.
 
-Usage:
-  python3 inventory.py <csv_dir> --out <output_dir> [--max-rows N]
+Functions for use from a notebook (see inventory.ipynb):
+
+    import inventory as I
+    inv = I.inventory_site(csv_dir)          # profile every CSV in a folder
+    inv["summary"]                           # one row per file
+    inv["profiles"]["some_file.csv"]         # one row per column
+    I.shared_columns(inv)                    # columns appearing in several files
+    I.id_overlap(inv)                        # ID overlap against the demographics file
+    I.write_report(inv, "RBH", out_path)     # Markdown report
+
+No row-level data is returned. ID-like columns get counts only.
 """
-import argparse
 import re
 import warnings
 from datetime import date
@@ -15,12 +21,12 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
-ID_HINT = re.compile(r"id|mrn|nhs|number|episode|admission|patient|spell|key", re.I)
-MAX_CAT = 25      # list values when a column has at most this many unique values
+ID_HINT = re.compile(r"id|mrn|nhs|number|episode|admission|patient|spell|key|_rk", re.I)
+MAX_CAT = 40      # list values when a column has at most this many unique values
 MAX_LEN = 40      # ...and the average string length is at most this
 
 
-def read(path, max_rows):
+def read(path, max_rows=None):
     for enc in ("utf-8", "latin-1"):
         try:
             df = pd.read_csv(path, low_memory=False, encoding=enc, nrows=max_rows)
@@ -31,15 +37,27 @@ def read(path, max_rows):
 
 
 def pattern(v):
-    """Shape of a value (digits -> d, letters -> a), so formats show without values."""
-    return re.sub(r"[A-Za-z]", "a", re.sub(r"\d", "d", str(v)))
+    """Shape of a value (letters -> a, digits -> d), so formats show without values."""
+    return re.sub(r"\d", "d", re.sub(r"[A-Za-z]", "a", str(v)))
+
+
+SAS_FMT = "%d%b%Y:%H:%M:%S.%f"   # e.g. 01JAN2020:12:34:56.78 (SAS datetime)
+
+
+def parse_dates(s):
+    """Parse a string column to datetimes. Returns (parsed Series, name of format used).
+    Tries the SAS datetime format first, then generic day-first parsing."""
+    sas = pd.to_datetime(s, format=SAS_FMT, errors="coerce")
+    if sas.notna().sum() >= 0.9 * s.notna().sum():
+        return sas, "SAS datetime DDMONYYYY:HH:MM:SS.ff"
+    return pd.to_datetime(s, errors="coerce", dayfirst=True), "generic, day-first"
 
 
 def looks_like_date(s):
     sample = s.dropna().astype(str).head(1000)
     if sample.empty or sample.str.len().median() < 6:
         return False
-    return pd.to_datetime(sample, errors="coerce", dayfirst=True).notna().mean() > 0.9
+    return parse_dates(sample)[0].notna().mean() > 0.9
 
 
 def counts_text(s):
@@ -69,17 +87,19 @@ def profile_column(s, name):
         info["detail"] = d
     else:
         if looks_like_date(s):
-            parsed = pd.to_datetime(s, errors="coerce", dayfirst=True)
+            parsed, how = parse_dates(s)
             first = s.dropna().iloc[0]
             info["detail"] = (f"datetime {parsed.min()} to {parsed.max()} "
-                              f"(parsed day-first); format {pattern(first)}")
+                              f"({how}); format {pattern(first)}")
         else:
             avg_len = s.dropna().astype(str).str.len().mean()
             if (info["unique"] <= MAX_CAT and avg_len <= MAX_LEN
                     and not ID_HINT.search(name)):
                 info["detail"] = counts_text(s)
             else:
-                info["detail"] = f"avg length {avg_len:.0f}"
+                # show the shape of the first value, e.g. to see unparsed timestamp formats
+                info["detail"] = (f"avg length {avg_len:.0f}; "
+                                  f"first value shape {pattern(s.dropna().iloc[0])}")
     info["detail"] = str(info["detail"]).replace("|", "/")
     return info
 
@@ -91,12 +111,21 @@ def md_table(rows, cols):
     return "\n".join(out)
 
 
+def df_text(df):
+    """DataFrame -> Markdown if `tabulate` is installed, else plain text."""
+    try:
+        return df.to_markdown()
+    except ImportError:
+        return df.to_string()
+
+
 def inventory_site(csv_dir, max_rows=None):
     """Profile every CSV in csv_dir. Returns a dict of DataFrames and ID sets."""
     files = sorted(Path(csv_dir).expanduser().glob("*.csv"))
     summary, profiles, col_files, id_sets = [], {}, {}, {}
     for f in files:
         df, enc = read(f, max_rows)
+        print(f"{f.name}: {len(df)} rows x {df.shape[1]} cols")
         summary.append({
             "file": f.name,
             "size MB": round(f.stat().st_size / 1e6, 1),
@@ -132,13 +161,16 @@ def id_overlap(inv, base="ai_picu_demographics.csv"):
     return pd.DataFrame(out)
 
 
-def write_report(inv, site, out_path):
-    """Write the Markdown report (same content as the earlier script)."""
+def write_report(inv, site, out_path, base="ai_picu_demographics.csv"):
+    """Write the Markdown report."""
+    summ = inv["summary"]
     parts = [f"# Inventory: {site}", f"Generated {date.today()}", "",
-             "# Files at a glance", "", md_table(inv["summary"].to_dict("records"),
-             list(inv["summary"].columns)), ""]
+             "# Files at a glance", "",
+             md_table(summ.to_dict("records"), list(summ.columns)), ""]
     for fn, prof in inv["profiles"].items():
         parts += [f"## {fn}", "", md_table(prof.to_dict("records"), list(prof.columns)), ""]
-    parts += ["## Columns shared between files", "", shared_columns(inv).to_markdown()
-              if hasattr(pd.DataFrame, "to_markdown") else shared_columns(inv).to_string(), ""]
+    parts += ["## Columns shared between files", "", df_text(shared_columns(inv)), ""]
+    overlap = id_overlap(inv, base)
+    if len(overlap):
+        parts += [f"## ID overlap with {base}", "", df_text(overlap), ""]
     Path(out_path).write_text("\n".join(parts) + "\n")
