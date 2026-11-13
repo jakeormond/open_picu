@@ -1,5 +1,5 @@
 # Inventory: SMH
-Generated 2026-11-10
+Generated 2026-11-13
 
 # Files at a glance
 
@@ -216,4 +216,77 @@ Generated 2026-11-10
 | 10 | encounterid | ai_picu_vent.csv                   |         4036 |         100 |
 | 11 | encounterid | ai_picu_vitals.csv                 |         4037 |         100 |
 | 12 | uniqueptid  | ai_picu_piccanet.csv               |         3090 |           0 |
+
+## Identifier and privacy flags
+
+| file                               | column                | dtype   |   unique |   unique % of rows | flags                        |
+|:-----------------------------------|:----------------------|:--------|---------:|-------------------:|:-----------------------------|
+| ai_picu_airway.csv                 | encounterId           | int64   |     4036 |              0.128 | ID-like                      |
+| ai_picu_airway.csv                 | utcChartTime          | str     |   145436 |              4.619 | date/time                    |
+| ai_picu_bg.csv                     | encounterId           | int64   |     3880 |              0.146 | ID-like                      |
+| ai_picu_bg.csv                     | utcChartTime          | str     |   156061 |              5.867 | date/time                    |
+| ai_picu_demographics.csv           | encounterId           | int64   |     4047 |             87.503 | ID-like                      |
+| ai_picu_demographics.csv           | UniquePtID            | str     |     3386 |             73.211 | ID-like                      |
+| ai_picu_demographics.csv           | Age                   | int64   |      215 |              4.649 | quasi-identifier             |
+| ai_picu_demographics.csv           | gender                | str     |        2 |              0.043 | quasi-identifier             |
+| ai_picu_demographics.csv           | ethnicGroup           | str     |       94 |              2.032 | quasi-identifier             |
+| ai_picu_demographics.csv           | Weight                | str     |      470 |             10.162 | quasi-identifier             |
+| ai_picu_demographics.csv           | inTime                | str     |     4049 |             87.546 | date/time                    |
+| ai_picu_demographics.csv           | primaryDiagnosis      | str     |      907 |             19.611 | free text?, quasi-identifier |
+| ai_picu_demographics.csv           | SepsisDiagnosis       | int64   |        2 |              0.043 | quasi-identifier             |
+| ai_picu_infusion.csv               | encounterId           | int64   |     2558 |              0.914 | ID-like                      |
+| ai_picu_infusion.csv               | utcChartTime          | str     |    72595 |             25.944 | free text?, date/time        |
+| ai_picu_infusion.csv               | Dosage_terse          | float64 |      915 |              0.327 | quasi-identifier             |
+| ai_picu_infusion.csv               | Dosage_verbose        | str     |     1284 |              0.459 | quasi-identifier             |
+| ai_picu_io.csv                     | utcChartTime          | str     |    96437 |              1.754 | date/time                    |
+| ai_picu_labs.csv                   | encounterId           | int64   |     3838 |              0.377 | ID-like                      |
+| ai_picu_labs.csv                   | utcChartTime          | str     |    54617 |              5.359 | date/time                    |
+| ai_picu_medications.csv            | encounterID           | int64   |     2717 |              8.264 | ID-like                      |
+| ai_picu_medications.csv            | utcChartTime          | str     |    27232 |             82.832 | date/time                    |
+| ai_picu_medications.csv            | Dosage_terse          | float64 |      624 |              1.898 | quasi-identifier             |
+| ai_picu_medications.csv            | Dosage_verbose        | str     |      625 |              1.901 | quasi-identifier             |
+| ai_picu_medications_furosemide.csv | encounterID           | int64   |     2076 |             16.39  | ID-like                      |
+| ai_picu_medications_furosemide.csv | utcChartTime          | str     |    11887 |             93.85  | date/time                    |
+| ai_picu_medications_furosemide.csv | Dosage_terse          | float64 |      158 |              1.247 | quasi-identifier             |
+| ai_picu_medications_furosemide.csv | Dosage_verbose        | str     |      158 |              1.247 | quasi-identifier             |
+| ai_picu_medications_v2.csv         | encounterID           | int64   |     2879 |              6.322 | ID-like                      |
+| ai_picu_medications_v2.csv         | utcChartTime          | str     |    35691 |             78.369 | date/time                    |
+| ai_picu_medications_v2.csv         | Dosage_terse          | float64 |      645 |              1.416 | quasi-identifier             |
+| ai_picu_medications_v2.csv         | Dosage_verbose        | str     |      646 |              1.418 | quasi-identifier             |
+| ai_picu_outcomes.csv               | encounterId           | int64   |     4047 |             86.901 | ID-like                      |
+| ai_picu_outcomes.csv               | isDeceased            | int64   |        2 |              0.043 | quasi-identifier             |
+| ai_picu_piccanet.csv               | encounterId           | int64   |     3709 |             99.946 | ID-like                      |
+| ai_picu_piccanet.csv               | UniquePtID            | str     |     3090 |             83.266 | ID-like                      |
+| ai_picu_piccanet.csv               | Age                   | int64   |      215 |              5.794 | quasi-identifier             |
+| ai_picu_piccanet.csv               | gender                | str     |        2 |              0.054 | quasi-identifier             |
+| ai_picu_piccanet.csv               | AdDateTime            | str     |     3711 |            100     | date/time                    |
+| ai_picu_piccanet.csv               | AdDate                | str     |     2327 |             62.705 | date/time                    |
+| ai_picu_piccanet.csv               | AdTime                | str     |     1015 |             27.351 | date/time                    |
+| ai_picu_piccanet.csv               | PrimaryDiagnosisGroup | str     |       14 |              0.377 | quasi-identifier             |
+| ai_picu_piccanet.csv               | SecDescriptions       | str     |     1343 |             36.19  | free text?                   |
+| ai_picu_piccanet.csv               | SexDescription        | str     |        2 |              0.054 | quasi-identifier             |
+| ai_picu_piccanet.csv               | EthnicDescription     | str     |       19 |              0.512 | quasi-identifier             |
+| ai_picu_piccanet.csv               | EthnicOther           | str     |      273 |              7.357 | free text?, quasi-identifier |
+| ai_picu_piccanet.csv               | Weight                | float64 |      549 |             14.794 | quasi-identifier             |
+| ai_picu_vent.csv                   | utcChartTime          | str     |   130545 |              1.266 | date/time                    |
+| ai_picu_vitals.csv                 | utcChartTime          | str     |   146810 |              1.621 | date/time                    |
+
+## Date and time columns
+
+| file                               | column       | dtype   |   non-missing | format                  | parsed as          | earliest            | latest              |   calendar years |   distinct days | resolution   | note                         |
+|:-----------------------------------|:-------------|:--------|--------------:|:------------------------|:-------------------|:--------------------|:--------------------|-----------------:|----------------:|:-------------|:-----------------------------|
+| ai_picu_airway.csv                 | utcChartTime | str     |       3148920 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2012-01-02 08:09:00 | 2023-03-06 12:00:00 |               12 |            4030 | second       | nan                          |
+| ai_picu_bg.csv                     | utcChartTime | str     |       2659774 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2012-01-02 09:48:00 | 2023-03-05 15:39:00 |               12 |            4005 | second       | nan                          |
+| ai_picu_demographics.csv           | inTime       | str     |          4625 | dd/dd/dddd dd:dd:dd     | generic, day-first | 2012-01-02 08:09:36 | 2022-12-30 21:10:38 |               11 |            2553 | second       | nan                          |
+| ai_picu_infusion.csv               | utcChartTime | str     |        279817 | nan                     | nan                | NaT                 | NaT                 |              nan |             nan | nan          | could not be parsed as dates |
+| ai_picu_io.csv                     | utcChartTime | str     |       5496565 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2011-12-31 10:00:00 | 2023-03-06 14:00:00 |               13 |            4038 | minute       | nan                          |
+| ai_picu_labs.csv                   | utcChartTime | str     |       1019225 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2012-01-02 10:26:00 | 2023-03-05 23:14:00 |               12 |            3996 | second       | nan                          |
+| ai_picu_medications.csv            | utcChartTime | str     |         32876 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2012-01-05 11:41:00 | 2023-02-12 04:50:00 |               12 |            3719 | minute       | nan                          |
+| ai_picu_medications_furosemide.csv | utcChartTime | str     |         12666 | dd/dd/dddd dd:dd        | generic, day-first | 2012-01-05 10:15:00 | 2023-02-06 14:00:00 |               12 |            3143 | minute       | nan                          |
+| ai_picu_medications_v2.csv         | utcChartTime | str     |         45542 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2012-01-05 10:15:00 | 2023-02-12 04:50:00 |               12 |            3838 | minute       | nan                          |
+| ai_picu_piccanet.csv               | AdDateTime   | str     |          3711 | dd/dd/dddd dd:dd:dd     | generic, day-first | 2013-01-02 02:01:00 | 2022-12-30 21:10:38 |               10 |            2327 | second       | nan                          |
+| ai_picu_piccanet.csv               | AdDate       | str     |          3711 | dd/dd/dddd              | generic, day-first | 2013-01-02 00:00:00 | 2022-12-30 00:00:00 |               10 |            2327 | date only    | nan                          |
+| ai_picu_piccanet.csv               | AdTime       | str     |          3333 | dd/dd/dddd dd:dd        | generic, day-first | 1900-01-01 00:00:00 | 2018-04-25 20:54:00 |                3 |              42 | minute       | nan                          |
+| ai_picu_vent.csv                   | utcChartTime | str     |      10307655 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2012-01-02 08:09:00 | 2023-03-06 12:00:00 |               12 |            4030 | second       | nan                          |
+| ai_picu_vitals.csv                 | utcChartTime | str     |       9058409 | dddd-dd-dd dd:dd:dd.ddd | generic, day-first | 2012-01-02 08:09:00 | 2023-03-06 12:46:00 |               12 |            4030 | second       | nan                          |
 

@@ -1,5 +1,5 @@
 # Inventory: RBH
-Generated 2026-11-09
+Generated 2026-11-13
 
 # Files at a glance
 
@@ -30,9 +30,9 @@ Generated 2026-11-09
 | studyID | str | 0.0 | 14797 | avg length 22; first value shape aaa:ddddddd:dddddddddd |
 | Day | float64 | 1.5 | 299 | min 0; p1 0; median 7; p99 158; max 1717 |
 | intv_hr | float64 | 1.5 | 6976 | min 0; p1 2; median 176; p99 3775; max 41224 |
-| chartTime | str | 1.5 | 116879 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 1.5 | 116879 | datetime 2009-01-21 20:30:00 to 2023-05-18 04:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | sizeETT | float64 | 1.6 | 26 | min 0; p1 3; median 3.5; p99 7.5; max 12 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PATIENT_RK | int64 | 0.0 | 10019 | min 84; p1 46712; median 1.02499e+06; p99 1.29767e+06; max 1.32331e+06 |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 17320; median 645215; p99 922418; max 936282 |
 
@@ -44,7 +44,7 @@ Generated 2026-11-09
 | PATIENT_RK | int64 | 0.0 | 10019 | min 84; p1 35578; median 231249; p99 1.28901e+06; max 1.32331e+06 |
 | Day | float64 | 1.2 | 843 | min -358; p1 -223; median 3; p99 238; max 4126 |
 | intv_hr | float64 | 1.2 | 15929 | min -8610; p1 -5350.07; median 72; p99 5707.07; max 99043 |
-| SampleCollectDateTime | str | 1.2 | 374776 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| SampleCollectDateTime | str | 1.2 | 374776 | datetime 2007-08-17 11:58:00 to 2023-05-22 23:06:11 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | SampleTypeDesc | str | 11.3 | 33 | Arterial Blood: 153868; Arterial: 136551; Venous blood: 61757; Capillary: 29619; Mixed Venous: 24930; Venous (Jugular): 23838; Other: 17697; Venous (Femoral): 15680; Venous [Jugular]: 5529; Venous [Femoral]: 3285; Venous (Mixed/PA): 3205; ECMO: Post-oxy: 2658; Venous (Peripheral): 2384; Venous (Subclavian): 2221; Venous: 1804; Venous (Umbilical): 1493; .Select Option: 1343; Unknown: 1296; Venous [Mixed / PA]: 1291; Haemofilter: 463; MixedVenous: 444; Venous [Subclavian]: 299; Venous [Peripheral]: 251; Bypass Prime: 239; Venous [Umbilical]: 207; ECMO: Pre-oxy: 161; .Select Options: 110; Cord Blood Venous: 17; ECMO [Post-oxy]: 17; Cord Blood Arterial: 11; Calibration Verification: 5; Profiency Testing: 2; Fetal Scalp: 2 |
 | pH | float64 | 2.1 | 124 | min 6.33; p1 7.19; median 7.39; p99 7.55; max 7.9 |
 | Lactate | float64 | 1.9 | 173 | min -0.8; p1 0.5; median 1.3; p99 7.9; max 43 |
@@ -67,7 +67,7 @@ Generated 2026-11-09
 | Hydrogen_Ion | float64 | 2.1 | 1077 | min 12.6; p1 28.3; median 40.8; p99 65.3; max 471.7 |
 | Anion_Gap_K | float64 | 57.3 | 411 | min -11.7; p1 4.8; median 11.1; p99 20.9; max 50.5 |
 | Anion_Gap | float64 | 57.3 | 417 | min -16.9; p1 0.5; median 7.2; p99 16.9; max 46.5 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 5579; median 567624; p99 919474; max 936282 |
 
 ## ai_picu_biochemistry.csv
@@ -78,7 +78,7 @@ Generated 2026-11-09
 | PATIENT_RK | int64 | 0.0 | 10019 | min 84; p1 10247; median 229848; p99 1.29033e+06; max 1.32331e+06 |
 | Day | float64 | 3.8 | 956 | min -359; p1 -209; median 5; p99 269; max 9245 |
 | intv_hr | float64 | 3.8 | 12134 | min -8619; p1 -5029; median 106; p99 6453; max 221896 |
-| SampleCollectDateTime | str | 3.8 | 72808 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| SampleCollectDateTime | str | 3.8 | 72808 | datetime 2003-05-13 00:00:00 to 2023-05-22 14:34:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | CRP | float64 | 19.3 | 497 | min 0; p1 1; median 29; p99 307; max 601 |
 | PCT | float64 | 99.3 | 338 | min 0.04; p1 0.05; median 0.57; p99 64.09; max 99.15 |
 | Creatinine | float64 | 24.0 | 451 | min 1; p1 8; median 34; p99 196; max 901 |
@@ -110,7 +110,7 @@ Generated 2026-11-09
 | Transferrin | float64 | 99.4 | 41 | min 0.6; p1 0.8; median 2.4; p99 4.6; max 5.2 |
 | Free_T4 | float64 | 98.1 | 289 | min 2.3; p1 4.5; median 14.1; p99 42.51; max 65.1 |
 | Tot_CO2 | float64 | 99.9 | 23 | min 5; p1 10.08; median 25; p99 36; max 36 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 5983; median 522317; p99 920324; max 936282 |
 
 ## ai_picu_coagulation.csv
@@ -121,7 +121,7 @@ Generated 2026-11-09
 | PATIENT_RK | int64 | 0.0 | 10019 | min 84; p1 9128; median 228907; p99 1.28261e+06; max 1.32331e+06 |
 | Day | float64 | 4.9 | 808 | min -359; p1 -213; median 4; p99 247; max 7592 |
 | intv_hr | float64 | 4.9 | 11259 | min -8619; p1 -5107.4; median 91; p99 5930.4; max 182224 |
-| SampleCollectDateTime | str | 4.9 | 60990 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| SampleCollectDateTime | str | 4.9 | 60990 | datetime 2003-05-13 00:00:00 to 2023-05-22 21:35:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | INR | float64 | 15.6 | 109 | min 0.7; p1 0.9; median 1.2; p99 3.5; max 19.1 |
 | APTT | float64 | 13.7 | 2254 | min 15.1; p1 22.8; median 41.9; p99 215.8; max 360.1 |
 | PT | float64 | 11.1 | 656 | min 8.2; p1 10.3; median 14; p99 40.9; max 233 |
@@ -129,7 +129,7 @@ Generated 2026-11-09
 | Hep_Conc | float64 | 58.0 | 379 | min 0; p1 0; median 0.32; p99 1.46; max 31.4 |
 | D_Dimer | float64 | 97.3 | 2084 | min 0; p1 115.66; median 2205; p99 45609.6; max 124100 |
 | LDH | float64 | 98.7 | 838 | min 130; p1 321; median 806; p99 4525.3; max 24846 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 6223.75; median 522317; p99 916596; max 936282 |
 
 ## ai_picu_demographics.csv
@@ -142,7 +142,7 @@ Generated 2026-11-09
 | Gender | int64 | 0.0 | 3 | min 1; p1 1; median 1; p99 2; max 9 / values -> 1: 8311; 2: 6480; 9: 8 |
 | Ethnicity | str | 29.8 | 17 | White British: 5388; Not stated: 1068; White Any other: 729; Black or Black British African: 558; Asian or Asian British Indian: 489; Asian or Asian British Any other: 401; Other Ethnic Any other: 352; Asian or Asian British Pakistani: 314; Black or Black British Caribbean: 227; Mixed White and Asian: 185; Mixed Any other: 146; Asian or Asian British Bangladeshi: 139; Mixed White and Black Caribbean: 118; Black or Black British Any other: 99; Mixed White and Black African: 70; White Irish: 60; Other Ethnic Chinese: 41 |
 | Weight_kg | float64 | 51.2 | 591 | min 0.6; p1 1; median 7; p99 76.158; max 175 |
-| PICUadm_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| PICUadm_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 8611.72; median 430974; p99 921398; max 936282 |
 
 ## ai_picu_full_blood_count.csv
@@ -153,7 +153,7 @@ Generated 2026-11-09
 | PATIENT_RK | int64 | 0.0 | 10019 | min 84; p1 10247; median 224681; p99 1.28901e+06; max 1.32331e+06 |
 | Day | float64 | 4.5 | 918 | min -359; p1 -212; median 4; p99 256; max 9245 |
 | intv_hr | float64 | 4.5 | 11426 | min -8619; p1 -5088.55; median 93; p99 6128.1; max 221891 |
-| SampleCollectDateTime | str | 4.5 | 63347 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| SampleCollectDateTime | str | 4.5 | 63347 | datetime 2003-05-13 00:00:00 to 2023-05-22 14:34:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | Hb | float64 | 4.9 | 383 | min 0.1; p1 8.2; median 92; p99 171; max 250 |
 | WBC | float64 | 4.8 | 557 | min 0; p1 3.3; median 11.2; p99 33.3; max 209.4 |
 | Neut | float64 | 4.9 | 1750 | min 0; p1 1.1; median 6.6; p99 26.6; max 129.8 |
@@ -167,7 +167,7 @@ Generated 2026-11-09
 | MCV | float64 | 4.8 | 183 | min 50; p1 69; median 87; p99 109; max 131 |
 | MCH | float64 | 4.8 | 284 | min 5.6; p1 22.2; median 29.6; p99 37.6; max 46.9 |
 | MCHC | float64 | 4.9 | 263 | min 6.7; p1 31.7; median 323; p99 357; max 469 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 5652; median 509620; p99 919474; max 936282 |
 
 ## ai_picu_infusion.csv
@@ -179,14 +179,14 @@ Generated 2026-11-09
 | Weight_kg | float64 | 1.6 | 377 | min 0.6; p1 2.2; median 5; p99 55.5; max 175 |
 | Day | int64 | 0.0 | 305 | min 0; p1 0; median 8; p99 198; max 440 |
 | intv_hr | int64 | 0.0 | 7213 | min 0; p1 3; median 182; p99 4742.43; max 10556 |
-| chartTime | str | 0.0 | 95031 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.0 | 95031 | datetime 2009-02-05 18:15:00 to 2022-11-25 23:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | Drug | str | 0.0 | 7 | MILRINONE: 344348; FUROSEMIDE: 171716; ADRENALINE: 136193; NORADRENALINE: 69246; VASOPRESSIN: 7215; DOPAMINE: 2029; DOBUTAMINE: 511 |
 | Dose | float64 | 0.0 | 3596 | min 3.7244e-05; p1 0.01; median 0.3; p99 1; max 20 |
 | Dose_Unit | str | 0.0 | 6 | mcg/kg/min: 552327; mg/kg/hr: 170650; Units/kg/min: 6410; mg/hr: 1065; Units/min: 805; mg: 1 |
 | Rate_Unit | str | 0.0 | 1 | ml/hr: 731189 |
-| WARD_IN_dttm | str | 0.0 | 2868 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 2868 | datetime 2009-01-21 22:30:00 to 2022-11-17 08:31:22 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | LOS | int64 | 0.0 | 721 | min 0; p1 31; median 562; p99 6730; max 60318 |
-| WARD_OUT_dttm | str | 0.1 | 2551 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_OUT_dttm | str | 0.1 | 2551 | datetime 2009-02-12 16:30:00 to 2022-12-03 16:00:06 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 2688 | min 391; p1 17157; median 604429; p99 779943; max 920192 |
 | encounterId | int64 | 0.0 | 2785 | min 92; p1 4203; median 32682; p99 76811; max 135811 |
 
@@ -200,7 +200,7 @@ Generated 2026-11-09
 | RRT | str | 86.2 | 1 | RRT: 356503 |
 | Day | float64 | 0.3 | 982 | min -359; p1 -220; median 9; p99 335; max 1540 |
 | intv_hr | float64 | 0.3 | 22708 | min -8619; p1 -5285; median 203; p99 8045; max 36954 |
-| chartTime | str | 0.3 | 144850 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.3 | 144850 | datetime 2009-01-21 09:00:00 to 2023-05-25 00:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | bolus_CSL | float64 | 99.4 | 263 | min 1; p1 5; median 28; p99 340; max 550 |
 | bolus_NACL | float64 | 99.9 | 118 | min 0.2; p1 1; median 5; p99 200; max 500 |
 | bolus_ISOPLEX | float64 | 100.0 | 54 | min 5; p1 10; median 25; p99 260; max 400 |
@@ -235,7 +235,7 @@ Generated 2026-11-09
 | Protein | float64 | 98.1 | 778 | min 0; p1 0; median 3.33; p99 8.4; max 89.4639 |
 | Fats | float64 | 97.4 | 998 | min 0; p1 0; median 1.9485; p99 7.47; max 74.7 |
 | Carbohydrates | float64 | 98.2 | 969 | min 0; p1 0; median 7.81; p99 24.16; max 167 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 20245; median 650059; p99 922650; max 936282 |
 
 ## ai_picu_meds.csv
@@ -247,15 +247,15 @@ Generated 2026-11-09
 | Weight_kg | float64 | 2.2 | 475 | min 0.6; p1 2.2; median 5.2; p99 59.344; max 175 |
 | Day | int64 | 0.0 | 359 | min 0; p1 0; median 10; p99 214; max 1545 |
 | intv_hr | int64 | 0.0 | 7020 | min 0; p1 7; median 233; p99 5135; max 37071 |
-| chartTime | str | 0.0 | 101290 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.0 | 101290 | datetime 2009-02-10 16:37:00 to 2023-05-23 00:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | Drug | str | 0.0 | 6 | FUROSEMIDE: 252402; SPIRONOLACTONE: 50025; CHLOROTHIAZIDE: 14806; HYDROCORTISONE: 7618; DEXAMETHASONE: 5815; METHYLPREDNISOLONE: 499 |
 | Route | str | 51.9 | 9 | NG: 95036; IV Bolus: 48703; PO: 7232; NJ: 5299; PEG: 1144; PEJ: 929; IV Infusion: 734; Topical: 197; IV: 170 |
 | Dose | float64 | 0.0 | 1042 | min 0.00119048; p1 0.0512821; median 0.5; p99 80; max 1000 |
 | Dose_Unit | str | 0.0 | 4 | mg/kg/hr: 170650; mg: 159253; mg/hr: 1065; Appl: 197 |
 | Rate_Unit | str | 48.1 | 1 | ml/hr: 171713 |
-| WARD_IN_dttm | str | 0.0 | 5071 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 5071 | datetime 2009-01-30 20:30:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | LOS | int64 | 0.0 | 876 | min 2; p1 36; median 642; p99 8344; max 60318 |
-| WARD_OUT_dttm | str | 0.2 | 4587 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_OUT_dttm | str | 0.2 | 4587 | datetime 2009-02-16 11:25:00 to 2023-05-21 18:39:11 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 4682 | min 391; p1 19868; median 616920; p99 920324; max 936282 |
 | encounterId | int64 | 0.0 | 4916 | min 92; p1 4175; median 33953; p99 136230; max 146975 |
 
@@ -279,11 +279,11 @@ Generated 2026-11-09
 | EthnicDescription | str | 7.6 | 17 | Not stated: 2716; White British: 994; Asian Indian: 169; Black African: 158; Asian Pakistani: 108; Mixed White and Asian: 65; Black Caribbean: 51; Asian Bangladeshi: 44; Unknown: 36; Mixed White and Black Caribbean: 35; Mixed White and Black African: 22; White Irish: 14; Asian other: 5; Chinese: 5; Other: 4; White other: 4; Mixed other: 2 |
 | EthnicOther | str | 99.7 | 11 | Arabic: 2; Arab: 1; Mixed any other background: 1; Caucasian: 1; Albanian: 1; Polish: 1; Kurdish: 1; Palestine: 1; Mediterranean: 1; Kuwaiti: 1; Tamil: 1 |
 | Weight | float64 | 8.9 | 536 | min 0.28; p1 1; median 7.1; p99 999; max 999 |
-| AdDateTime | str | 7.6 | 4383 | avg length 18; first value shape ddaaadddd:dd:dd:dd |
-| AdDate | str | 7.6 | 2456 | datetime 2013-01-02 00:00:00 to 2022-12-31 00:00:00 (parsed day-first); format ddaaadddd |
+| AdDateTime | str | 7.6 | 4383 | datetime 2013-01-02 15:25:00 to 2022-12-31 04:20:00 (SAS datetime DDMONYYYY:HH:MM:SS); format ddaaadddd:dd:dd:dd |
+| AdDate | str | 7.6 | 2456 | datetime 2013-01-02 00:00:00 to 2022-12-31 00:00:00 (generic, day-first); format ddaaadddd |
 | AdTime | str | 7.6 | 608 | avg length 5; first value shape d:dd |
 | LOSHours | float64 | 7.6 | 684 | min 1; p1 5; median 74; p99 1840.76; max 11013 |
-| UnitDisDateTime | str | 7.6 | 4363 | avg length 18; first value shape ddaaadddd:dd:dd:dd |
+| UnitDisDateTime | str | 7.6 | 4363 | datetime 2013-01-02 13:30:00 to 2022-12-31 08:58:00 (SAS datetime DDMONYYYY:HH:MM:SS); format ddaaadddd:dd:dd:dd |
 | PrimaryDiagnosisGroup | str | 7.6 | 13 | Cardiovascular: 3784; Respiratory: 395; Gastrointestinal: 55; Oncology: 44; Other: 38; Infection: 36; Neurological: 25; Unknown: 18; Endocrine / metabolic: 14; Musculoskeletal: 12; Body wall and cavities: 8; Multisystem: 2; Trauma: 1 |
 | SecDescriptions | str | 19.9 | 2386 | avg length 78; first value shape aaaaaaaaaaa aa aaaaaaaaa aaaaaa/aaaaa aaaaaa aaaaaaaaa/aaa   aaaaaa aaaaaa aaaaaa/aaaa  aaaaaaaa aaaaaaaaaaaaaaaa aaaaaa aaaaaa/aaaaa aaaaaa aaaa aaa aaaa aaaaaaaaaa aaaaa/aaaaa |
 | PIM3 | float64 | 7.6 | 4056 | min 0.000865982; p1 0.00178666; median 0.0168047; p99 0.362341; max 0.945531 |
@@ -305,11 +305,11 @@ Generated 2026-11-09
 | EthnicDescription | str | 10.2 | 17 | Not stated: 4208; White British: 1701; Asian Indian: 289; Black African: 257; Asian Pakistani: 185; Mixed White and Asian: 105; Black Caribbean: 90; Asian Bangladeshi: 70; Mixed White and Black Caribbean: 63; Unknown: 62; Mixed White and Black African: 32; White Irish: 24; Asian other: 9; White other: 7; Chinese: 7; Other: 5; Mixed other: 2 |
 | EthnicOther | str | 99.8 | 11 | Arabic: 3; Polish: 2; Kurdish: 2; Palestine: 2; Kuwaiti: 2; Arab: 1; Mixed any other background: 1; Caucasian: 1; Albanian: 1; Mediterranean: 1; Tamil: 1 |
 | Weight | float64 | 11.5 | 544 | min 0.28; p1 1; median 7.2; p99 999; max 999 |
-| AdDateTime | str | 10.2 | 4673 | avg length 18; first value shape ddaaadddd:dd:dd:dd |
-| AdDate | str | 10.2 | 2540 | datetime 2013-01-01 00:00:00 to 2022-12-31 00:00:00 (parsed day-first); format ddaaadddd |
+| AdDateTime | str | 10.2 | 4673 | datetime 2013-01-01 19:00:00 to 2022-12-31 19:40:00 (SAS datetime DDMONYYYY:HH:MM:SS); format ddaaadddd:dd:dd:dd |
+| AdDate | str | 10.2 | 2540 | datetime 2013-01-01 00:00:00 to 2022-12-31 00:00:00 (generic, day-first); format ddaaadddd |
 | AdTime | str | 10.2 | 632 | avg length 5; first value shape dd:dd |
 | LOSHours | float64 | 10.2 | 720 | min 1; p1 5; median 75; p99 1801.4; max 11013 |
-| UnitDisDateTime | str | 10.2 | 4654 | avg length 18; first value shape ddaaadddd:dd:dd:dd |
+| UnitDisDateTime | str | 10.2 | 4654 | datetime 2013-01-01 12:33:00 to 2022-12-31 15:30:00 (SAS datetime DDMONYYYY:HH:MM:SS); format ddaaadddd:dd:dd:dd |
 | PrimaryDiagnosisGroup | str | 10.2 | 13 | Cardiovascular: 6383; Respiratory: 440; Gastrointestinal: 64; Other: 46; Infection: 45; Oncology: 44; Neurological: 29; Unknown: 22; Musculoskeletal: 16; Endocrine / metabolic: 15; Body wall and cavities: 9; Multisystem: 2; Trauma: 1 |
 | SecDescriptions | str | 20.3 | 2535 | avg length 79; first value shape aaaaaaa/aaaa (aaaaaaa aaaa) |
 | PIM3 | float64 | 10.2 | 4289 | min 0.000865982; p1 0.00190709; median 0.0156148; p99 0.336888; max 0.945531 |
@@ -328,14 +328,14 @@ Generated 2026-11-09
 | Weight_kg | float64 | 2.0 | 519 | min 0.6; p1 2; median 5.9; p99 98; max 175 |
 | Day | int64 | 0.0 | 334 | min 0; p1 0; median 8; p99 168; max 2041 |
 | intv_hr | int64 | 0.0 | 6866 | min 0; p1 2; median 192; p99 4030; max 48981 |
-| chartTime | str | 0.0 | 160530 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.0 | 160530 | datetime 2012-12-18 15:20:00 to 2023-09-05 23:35:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | Drug | str | 0.0 | 11 | MORPHINE SULPHATE IV: 506168; CLONIDINE: 251464; MIDAZOLAM: 157675; FENTANYL: 106192; MORPHINE SULPHATE: 63104; VECURONIUM: 60947; ATRACURIUM: 23943; PROPOFOL: 9192; KETAMINE: 8316; DEXMEDETOMIDINE: 6285; REMIFENTANIL: 29 |
 | Dose | float64 | 0.0 | 3842 | min 0.01; p1 0.1; median 10; p99 600; max 2000 |
 | Dose_Unit | str | 0.0 | 8 | microgram/kg/hr: 907070; mg: 159289; micrograms: 81652; mg/hr: 29471; micrograms/hr: 10649; mg/kg/hr: 2921; mcg/kg/min: 2214; ug/ml: 49 |
 | Rate_Unit | str | 20.2 | 1 | ml/hr: 952324 |
-| WARD_IN_dttm | str | 0.0 | 5077 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 5077 | datetime 2012-12-18 14:40:00 to 2023-09-04 18:22:18 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | LOS | int64 | 0.0 | 952 | min 1; p1 22; median 584; p99 8344; max 65944 |
-| WARD_OUT_dttm | str | 0.1 | 4623 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_OUT_dttm | str | 0.1 | 4623 | datetime 2012-12-19 12:30:00 to 2023-10-02 09:30:14 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 4312 | min 2094; p1 21727; median 671719; p99 919575; max 946225 |
 | encounterId | int64 | 0.0 | 4577 | min 17413; p1 17914; median 45737; p99 135592; max 153341 |
 
@@ -348,14 +348,14 @@ Generated 2026-11-09
 | Weight_kg | float64 | 2.8 | 408 | min 0.6; p1 2.2; median 6.1; p99 100; max 136 |
 | Day | int64 | 0.0 | 275 | min 0; p1 0; median 11; p99 182; max 439 |
 | intv_hr | int64 | 0.0 | 6434 | min 0; p1 3; median 258; p99 4371.9; max 10525 |
-| chartTime | str | 0.0 | 88391 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.0 | 88391 | datetime 2009-05-15 14:05:00 to 2023-02-03 17:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | Drug | str | 0.0 | 10 | CLONIDINE: 204466; MIDAZOLAM: 136385; FENTANYL: 59897; VECURONIUM: 51255; ATRACURIUM: 18449; PROPOFOL: 7734; DEXMEDETOMIDINE: 3678; KETAMINE: 2188; REMIFENTANIL: 50; MORPHINE SULPHATE: 9 |
 | Dose | float64 | 0.0 | 3460 | min 0.0057971; p1 0.48; median 3.5; p99 900; max 1700 |
 | Dose_Unit | str | 0.0 | 7 | microgram/kg/hr: 457515; mg/hr: 12324; micrograms/hr: 9282; mg/kg/hr: 2744; mcg/kg/min: 2238; mg: 7; micrograms: 1 |
 | Rate_Unit | str | 0.0 | 1 | ml/hr: 484103 |
-| WARD_IN_dttm | str | 0.0 | 2598 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 2598 | datetime 2009-05-15 02:30:00 to 2023-02-02 10:33:24 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | LOS | int64 | 0.0 | 722 | min 2; p1 41; median 779; p99 8344; max 60318 |
-| WARD_OUT_dttm | str | 0.1 | 2355 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_OUT_dttm | str | 0.1 | 2355 | datetime 2009-05-19 20:00:00 to 2023-02-07 18:34:29 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 2441 | min 590; p1 14754; median 618670; p99 866302; max 926657 |
 | encounterId | int64 | 0.0 | 2532 | min 902; p1 4351; median 34446; p99 107599; max 140301 |
 
@@ -367,11 +367,11 @@ Generated 2026-11-09
 | PATIENT_RK | int64 | 0.0 | 10019 | min 84; p1 53533; median 1.03373e+06; p99 1.29834e+06; max 1.32331e+06 |
 | Day | float64 | 0.9 | 376 | min 0; p1 0; median 6; p99 166; max 1545 |
 | intv_hr | float64 | 0.9 | 7411 | min 0; p1 1; median 134; p99 3974; max 37081 |
-| chartTime | str | 0.9 | 295280 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.9 | 295280 | datetime 2009-01-23 14:35:00 to 2023-05-18 04:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | clinicalUnit | str | 0.9 | 2 | RBH-PICU: 855681; RBH-Theatre: 57305 |
 | centralTemp_C | float64 | 25.1 | 310 | min 0.2; p1 28.2; median 36.7; p99 38.4; max 45 |
 | periphTemp_C | float64 | 24.6 | 322 | min 0.2; p1 24.3; median 32.5; p99 37.3; max 41.3 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 20050; median 674048; p99 923496; max 936282 |
 
 ## ai_picu_vent.csv
@@ -383,7 +383,7 @@ Generated 2026-11-09
 | Weight_kg | float64 | 2.9 | 591 | min 0.6; p1 1.6; median 5.4; p99 80; max 175 |
 | Day | float64 | 0.5 | 389 | min 0; p1 0; median 7; p99 185; max 1717 |
 | intv_hr | float64 | 0.5 | 9168 | min 0; p1 0; median 161; p99 4438; max 41225 |
-| chartTime | str | 0.5 | 481990 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.5 | 481990 | datetime 2009-01-23 14:35:00 to 2023-05-23 01:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | clinicalUnit | str | 0.5 | 9 | RBH-PICU: 1404238; RBH-PHDU: 191702; RBH-Theatre: 89169; RBH-Cath: 12491; RBH-Reginald-Wilson: 340; RBH-Recovery: 73; RBH-AICU: 20; RBH-Alex: 14; RBH-EICU/EHDU: 5 |
 | Ventilation_Mode | str | 29.4 | 29 | BiPAP: 507660; Self Vent: 307031; CPAP: 154159; Nasal High Flow: 58407; PC-BIPAP: 53387; CPAP+Pressure Support: 31134; BILEVEL: 27261; SIMV: 18483; SIMV + PS: 9995; VC-SIMV: 8961; HFOV: 8070; High Flow: 7675; SPN-CPAP/PS: 5430; NIV: 2522; PCV: 1306; ASB: 1296; PC-SIMV: 569; IPPV: 211; BIPAP-APRV: 190; BIPAP-SIMV: 189; T Piece: 171; PC-APRV: 171; SPN-CPAP/VS: 116; CMV: 34; PC-AC: 32; SIPPV: 18; SPN-PPS: 10; VC-MMV: 10; PAV: 9 |
 | Airway | str | 29.8 | 1074 | avg length 8; first value shape aaaa aaa |
@@ -414,9 +414,9 @@ Generated 2026-11-09
 | Plateau_Pressure | float64 | 77.4 | 59 | min -2; p1 11; median 20; p99 31; max 86 |
 | Compliance_Dynamic | float64 | 57.3 | 201 | min 0; p1 0; median 3; p99 60; max 200 |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 23947; median 693900; p99 926901; max 936282 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | LOS | int64 | 0.0 | 1004 | min -1744; p1 17; median 455; p99 6730; max 75541 |
-| WARD_OUT_dttm | str | 0.4 | 11544 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_OUT_dttm | str | 0.4 | 11544 | datetime 1990-12-06 00:00:00 to 2023-05-21 18:39:11 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 
 ## ai_picu_vitals.csv
 
@@ -427,7 +427,7 @@ Generated 2026-11-09
 | Weight_kg | float64 | 2.9 | 591 | min 0.6; p1 1.3; median 5.4; p99 80; max 175 |
 | Day | float64 | 0.4 | 389 | min 0; p1 0; median 6; p99 182; max 1717 |
 | intv_hr | float64 | 0.4 | 9163 | min 0; p1 0; median 151; p99 4363; max 41225 |
-| chartTime | str | 0.4 | 703832 | avg length 22; first value shape ddaaadddd:dd:dd:dd.ddd |
+| chartTime | str | 0.4 | 703832 | datetime 2009-01-23 14:35:00 to 2023-05-23 00:00:00 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.ddd |
 | clinicalUnit | str | 0.4 | 9 | RBH-PICU: 1615795; RBH-PHDU: 195389; RBH-Theatre: 108087; RBH-Cath: 29553; RBH-Reginald-Wilson: 355; RBH-Recovery: 72; RBH-AICU: 19; RBH-Alex: 13; RBH-EICU/EHDU: 4 |
 | HR | float64 | 10.4 | 300 | min 0; p1 59; median 130; p99 184; max 300 |
 | Underlying_Cardiac_Rhythm | str | 97.8 | 361 | avg length 4; first value shape aaaaa |
@@ -438,9 +438,9 @@ Generated 2026-11-09
 | ABP_m | float64 | 63.0 | 201 | min 0; p1 28; median 56; p99 100; max 200 |
 | ABP_d | float64 | 65.2 | 155 | min 0; p1 23; median 44; p99 80; max 176 |
 | PAS_AD_RK | int64 | 0.0 | 13285 | min 2; p1 23947; median 693156; p99 926901; max 936282 |
-| WARD_IN_dttm | str | 0.0 | 12438 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_IN_dttm | str | 0.0 | 12438 | datetime 1990-09-24 00:00:00 to 2023-05-19 16:46:12 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 | LOS | int64 | 0.0 | 1004 | min -1744; p1 16; median 449; p99 6730; max 75541 |
-| WARD_OUT_dttm | str | 0.4 | 11544 | avg length 21; first value shape ddaaadddd:dd:dd:dd.dd |
+| WARD_OUT_dttm | str | 0.4 | 11544 | datetime 1990-12-06 00:00:00 to 2023-05-21 18:39:11 (SAS datetime DDMONYYYY:HH:MM:SS.ff); format ddaaadddd:dd:dd:dd.dd |
 
 ## Columns shared between files
 
@@ -536,4 +536,176 @@ Generated 2026-11-09
 | 39 | pas_ad_rk  | ai_picu_temp.csv             |        13285 |       100   |
 | 40 | pas_ad_rk  | ai_picu_vent.csv             |        13285 |       100   |
 | 41 | pas_ad_rk  | ai_picu_vitals.csv           |        13285 |       100   |
+
+## Identifier and privacy flags
+
+| file                         | column                | dtype   |   unique |   unique % of rows | flags            |
+|:-----------------------------|:----------------------|:--------|---------:|-------------------:|:-----------------|
+| ai_picu_airway.csv           | studyID               | str     |    14797 |              2.405 | ID-like          |
+| ai_picu_airway.csv           | chartTime             | str     |   116879 |             18.993 | date/time        |
+| ai_picu_airway.csv           | WARD_IN_dttm          | str     |    12438 |              2.021 | date/time        |
+| ai_picu_airway.csv           | PATIENT_RK            | int64   |    10019 |              1.628 | ID-like          |
+| ai_picu_airway.csv           | PAS_AD_RK             | int64   |    13285 |              2.159 | ID-like          |
+| ai_picu_bg.csv               | studyID               | str     |    14797 |              2.665 | ID-like          |
+| ai_picu_bg.csv               | PATIENT_RK            | int64   |    10019 |              1.805 | ID-like          |
+| ai_picu_bg.csv               | SampleCollectDateTime | str     |   374776 |             67.504 | date/time        |
+| ai_picu_bg.csv               | WARD_IN_dttm          | str     |    12438 |              2.24  | date/time        |
+| ai_picu_bg.csv               | PAS_AD_RK             | int64   |    13285 |              2.393 | ID-like          |
+| ai_picu_biochemistry.csv     | studyID               | str     |    14797 |              9.921 | ID-like          |
+| ai_picu_biochemistry.csv     | PATIENT_RK            | int64   |    10019 |              6.717 | ID-like          |
+| ai_picu_biochemistry.csv     | SampleCollectDateTime | str     |    72808 |             48.814 | date/time        |
+| ai_picu_biochemistry.csv     | WARD_IN_dttm          | str     |    12438 |              8.339 | date/time        |
+| ai_picu_biochemistry.csv     | PAS_AD_RK             | int64   |    13285 |              8.907 | ID-like          |
+| ai_picu_coagulation.csv      | studyID               | str     |    14797 |             11.88  | ID-like          |
+| ai_picu_coagulation.csv      | PATIENT_RK            | int64   |    10019 |              8.044 | ID-like          |
+| ai_picu_coagulation.csv      | SampleCollectDateTime | str     |    60990 |             48.966 | date/time        |
+| ai_picu_coagulation.csv      | WARD_IN_dttm          | str     |    12438 |              9.986 | date/time        |
+| ai_picu_coagulation.csv      | PAS_AD_RK             | int64   |    13285 |             10.666 | ID-like          |
+| ai_picu_demographics.csv     | studyID               | str     |    14797 |             99.986 | ID-like          |
+| ai_picu_demographics.csv     | PATIENT_RK            | int64   |    10019 |             67.701 | ID-like          |
+| ai_picu_demographics.csv     | Age_mth               | int64   |      253 |              1.71  | quasi-identifier |
+| ai_picu_demographics.csv     | Gender                | int64   |        3 |              0.02  | quasi-identifier |
+| ai_picu_demographics.csv     | Ethnicity             | str     |       17 |              0.115 | quasi-identifier |
+| ai_picu_demographics.csv     | Weight_kg             | float64 |      591 |              3.994 | quasi-identifier |
+| ai_picu_demographics.csv     | PICUadm_dttm          | str     |    12438 |             84.046 | date/time        |
+| ai_picu_demographics.csv     | PAS_AD_RK             | int64   |    13285 |             89.77  | ID-like          |
+| ai_picu_full_blood_count.csv | studyID               | str     |    14797 |             11.407 | ID-like          |
+| ai_picu_full_blood_count.csv | PATIENT_RK            | int64   |    10019 |              7.724 | ID-like          |
+| ai_picu_full_blood_count.csv | SampleCollectDateTime | str     |    63347 |             48.834 | date/time        |
+| ai_picu_full_blood_count.csv | WARD_IN_dttm          | str     |    12438 |              9.588 | date/time        |
+| ai_picu_full_blood_count.csv | PAS_AD_RK             | int64   |    13285 |             10.241 | ID-like          |
+| ai_picu_infusion.csv         | studyID               | str     |     2884 |              0.394 | ID-like          |
+| ai_picu_infusion.csv         | PATIENT_RK            | int64   |     2215 |              0.303 | ID-like          |
+| ai_picu_infusion.csv         | Weight_kg             | float64 |      377 |              0.052 | quasi-identifier |
+| ai_picu_infusion.csv         | chartTime             | str     |    95031 |             12.996 | date/time        |
+| ai_picu_infusion.csv         | WARD_IN_dttm          | str     |     2868 |              0.392 | date/time        |
+| ai_picu_infusion.csv         | WARD_OUT_dttm         | str     |     2551 |              0.349 | date/time        |
+| ai_picu_infusion.csv         | PAS_AD_RK             | int64   |     2688 |              0.368 | ID-like          |
+| ai_picu_infusion.csv         | encounterId           | int64   |     2785 |              0.381 | ID-like          |
+| ai_picu_io.csv               | studyID               | str     |    14797 |              0.572 | ID-like          |
+| ai_picu_io.csv               | PATIENT_RK            | int64   |    10019 |              0.387 | ID-like          |
+| ai_picu_io.csv               | Weight_kg             | float64 |      591 |              0.023 | quasi-identifier |
+| ai_picu_io.csv               | chartTime             | str     |   144850 |              5.596 | date/time        |
+| ai_picu_io.csv               | WARD_IN_dttm          | str     |    12438 |              0.481 | date/time        |
+| ai_picu_io.csv               | PAS_AD_RK             | int64   |    13285 |              0.513 | ID-like          |
+| ai_picu_meds.csv             | studyID               | str     |     5109 |              1.543 | ID-like          |
+| ai_picu_meds.csv             | PATIENT_RK            | int64   |     3694 |              1.115 | ID-like          |
+| ai_picu_meds.csv             | Weight_kg             | float64 |      475 |              0.143 | quasi-identifier |
+| ai_picu_meds.csv             | chartTime             | str     |   101290 |             30.586 | date/time        |
+| ai_picu_meds.csv             | WARD_IN_dttm          | str     |     5071 |              1.531 | date/time        |
+| ai_picu_meds.csv             | WARD_OUT_dttm         | str     |     4587 |              1.385 | date/time        |
+| ai_picu_meds.csv             | PAS_AD_RK             | int64   |     4682 |              1.414 | ID-like          |
+| ai_picu_meds.csv             | encounterId           | int64   |     4916 |              1.484 | ID-like          |
+| ai_picu_outcomes.csv         | studyID               | str     |    14797 |            100     | ID-like          |
+| ai_picu_piccanet.csv         | studyID               | str     |     4795 |             99.979 | ID-like          |
+| ai_picu_piccanet.csv         | AgeDays               | float64 |     1778 |             37.073 | quasi-identifier |
+| ai_picu_piccanet.csv         | AgeMonths             | float64 |      204 |              4.254 | quasi-identifier |
+| ai_picu_piccanet.csv         | AgeYears              | float64 |       18 |              0.375 | quasi-identifier |
+| ai_picu_piccanet.csv         | Gender                | float64 |        3 |              0.063 | quasi-identifier |
+| ai_picu_piccanet.csv         | EthnicDescription     | str     |       17 |              0.354 | quasi-identifier |
+| ai_picu_piccanet.csv         | EthnicOther           | str     |       11 |              0.229 | quasi-identifier |
+| ai_picu_piccanet.csv         | Weight                | float64 |      536 |             11.176 | quasi-identifier |
+| ai_picu_piccanet.csv         | AdDateTime            | str     |     4383 |             91.389 | date/time        |
+| ai_picu_piccanet.csv         | AdDate                | str     |     2456 |             51.209 | date/time        |
+| ai_picu_piccanet.csv         | AdTime                | str     |      608 |             12.677 | date/time        |
+| ai_picu_piccanet.csv         | UnitDisDateTime       | str     |     4363 |             90.972 | date/time        |
+| ai_picu_piccanet.csv         | PrimaryDiagnosisGroup | str     |       13 |              0.271 | quasi-identifier |
+| ai_picu_piccanet.csv         | SecDescriptions       | str     |     2386 |             49.75  | free text?       |
+| ai_picu_piccanet.csv         | EventID               | float64 |     4404 |             91.827 | ID-like          |
+| ai_picu_piccanet_old.csv     | studyID               | str     |     7926 |             99.975 | ID-like          |
+| ai_picu_piccanet_old.csv     | AgeDays               | float64 |     1799 |             22.692 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | AgeMonths             | float64 |      204 |              2.573 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | AgeYears              | float64 |       18 |              0.227 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | Gender                | float64 |        3 |              0.038 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | EthnicDescription     | str     |       17 |              0.214 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | EthnicOther           | str     |       11 |              0.139 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | Weight                | float64 |      544 |              6.862 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | AdDateTime            | str     |     4673 |             58.943 | date/time        |
+| ai_picu_piccanet_old.csv     | AdDate                | str     |     2540 |             32.038 | date/time        |
+| ai_picu_piccanet_old.csv     | AdTime                | str     |      632 |              7.972 | date/time        |
+| ai_picu_piccanet_old.csv     | UnitDisDateTime       | str     |     4654 |             58.703 | date/time        |
+| ai_picu_piccanet_old.csv     | PrimaryDiagnosisGroup | str     |       13 |              0.164 | quasi-identifier |
+| ai_picu_piccanet_old.csv     | SecDescriptions       | str     |     2535 |             31.975 | free text?       |
+| ai_picu_piccanet_old.csv     | EventID               | float64 |     4700 |             59.284 | ID-like          |
+| ai_picu_sedation.csv         | studyID               | str     |     7576 |              0.635 | ID-like          |
+| ai_picu_sedation.csv         | PATIENT_RK            | int64   |     3501 |              0.293 | ID-like          |
+| ai_picu_sedation.csv         | Weight_kg             | float64 |      519 |              0.043 | quasi-identifier |
+| ai_picu_sedation.csv         | chartTime             | str     |   160530 |             13.452 | date/time        |
+| ai_picu_sedation.csv         | WARD_IN_dttm          | str     |     5077 |              0.425 | date/time        |
+| ai_picu_sedation.csv         | WARD_OUT_dttm         | str     |     4623 |              0.387 | date/time        |
+| ai_picu_sedation.csv         | PAS_AD_RK             | int64   |     4312 |              0.361 | ID-like          |
+| ai_picu_sedation.csv         | encounterId           | int64   |     4577 |              0.384 | ID-like          |
+| ai_picu_sedation_old.csv     | studyID               | str     |     2613 |              0.54  | ID-like          |
+| ai_picu_sedation_old.csv     | PATIENT_RK            | int64   |     2069 |              0.427 | ID-like          |
+| ai_picu_sedation_old.csv     | Weight_kg             | float64 |      408 |              0.084 | quasi-identifier |
+| ai_picu_sedation_old.csv     | chartTime             | str     |    88391 |             18.258 | date/time        |
+| ai_picu_sedation_old.csv     | WARD_IN_dttm          | str     |     2598 |              0.537 | date/time        |
+| ai_picu_sedation_old.csv     | WARD_OUT_dttm         | str     |     2355 |              0.486 | date/time        |
+| ai_picu_sedation_old.csv     | PAS_AD_RK             | int64   |     2441 |              0.504 | ID-like          |
+| ai_picu_sedation_old.csv     | encounterId           | int64   |     2532 |              0.523 | ID-like          |
+| ai_picu_temp.csv             | studyID               | str     |    14797 |              1.607 | ID-like          |
+| ai_picu_temp.csv             | PATIENT_RK            | int64   |    10019 |              1.088 | ID-like          |
+| ai_picu_temp.csv             | chartTime             | str     |   295280 |             32.059 | date/time        |
+| ai_picu_temp.csv             | WARD_IN_dttm          | str     |    12438 |              1.35  | date/time        |
+| ai_picu_temp.csv             | PAS_AD_RK             | int64   |    13285 |              1.442 | ID-like          |
+| ai_picu_vent.csv             | studyID               | str     |    14797 |              0.867 | ID-like          |
+| ai_picu_vent.csv             | PATIENT_RK            | int64   |    10019 |              0.587 | ID-like          |
+| ai_picu_vent.csv             | Weight_kg             | float64 |      591 |              0.035 | quasi-identifier |
+| ai_picu_vent.csv             | chartTime             | str     |   481990 |             28.253 | date/time        |
+| ai_picu_vent.csv             | PAS_AD_RK             | int64   |    13285 |              0.779 | ID-like          |
+| ai_picu_vent.csv             | WARD_IN_dttm          | str     |    12438 |              0.729 | date/time        |
+| ai_picu_vent.csv             | WARD_OUT_dttm         | str     |    11544 |              0.677 | date/time        |
+| ai_picu_vitals.csv           | studyID               | str     |    14797 |              0.756 | ID-like          |
+| ai_picu_vitals.csv           | PATIENT_RK            | int64   |    10019 |              0.512 | ID-like          |
+| ai_picu_vitals.csv           | Weight_kg             | float64 |      591 |              0.03  | quasi-identifier |
+| ai_picu_vitals.csv           | chartTime             | str     |   703832 |             35.961 | date/time        |
+| ai_picu_vitals.csv           | PAS_AD_RK             | int64   |    13285 |              0.679 | ID-like          |
+| ai_picu_vitals.csv           | WARD_IN_dttm          | str     |    12438 |              0.635 | date/time        |
+| ai_picu_vitals.csv           | WARD_OUT_dttm         | str     |    11544 |              0.59  | date/time        |
+
+## Date and time columns
+
+| file                         | column                | dtype   |   non-missing | format                 | parsed as                          | earliest            | latest              |   calendar years |   distinct days | resolution   | note                       |
+|:-----------------------------|:----------------------|:--------|--------------:|:-----------------------|:-----------------------------------|:--------------------|:--------------------|-----------------:|----------------:|:-------------|:---------------------------|
+| ai_picu_airway.csv           | chartTime             | str     |        605912 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-01-21 20:30:00 | 2023-05-18 04:00:00 |               15 |            4721 | minute       | nan                        |
+| ai_picu_airway.csv           | WARD_IN_dttm          | str     |        615369 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_bg.csv               | SampleCollectDateTime | str     |        548494 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2007-08-17 11:58:00 | 2023-05-22 23:06:11 |               17 |            5696 | second       | nan                        |
+| ai_picu_bg.csv               | WARD_IN_dttm          | str     |        555193 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_biochemistry.csv     | SampleCollectDateTime | str     |        143442 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2003-05-13 00:00:00 | 2023-05-22 14:34:00 |               19 |            6342 | minute       | nan                        |
+| ai_picu_biochemistry.csv     | WARD_IN_dttm          | str     |        149154 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_coagulation.csv      | SampleCollectDateTime | str     |        118461 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2003-05-13 00:00:00 | 2023-05-22 21:35:00 |               19 |            6325 | minute       | nan                        |
+| ai_picu_coagulation.csv      | WARD_IN_dttm          | str     |        124556 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_demographics.csv     | PICUadm_dttm          | str     |         14799 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_full_blood_count.csv | SampleCollectDateTime | str     |        123946 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2003-05-13 00:00:00 | 2023-05-22 14:34:00 |               19 |            6339 | minute       | nan                        |
+| ai_picu_full_blood_count.csv | WARD_IN_dttm          | str     |        129719 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_infusion.csv         | chartTime             | str     |        731258 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-02-05 18:15:00 | 2022-11-25 23:00:00 |               14 |            3247 | minute       | nan                        |
+| ai_picu_infusion.csv         | WARD_IN_dttm          | str     |        731258 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-01-21 22:30:00 | 2022-11-17 08:31:22 |               14 |            1919 | second       | nan                        |
+| ai_picu_infusion.csv         | WARD_OUT_dttm         | str     |        730665 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-02-12 16:30:00 | 2022-12-03 16:00:06 |               14 |            1896 | second       | nan                        |
+| ai_picu_io.csv               | chartTime             | str     |       2580697 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-01-21 09:00:00 | 2023-05-25 00:00:00 |               15 |            5216 | minute       | nan                        |
+| ai_picu_io.csv               | WARD_IN_dttm          | str     |       2588228 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_meds.csv             | chartTime             | str     |        331165 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-02-10 16:37:00 | 2023-05-23 00:00:00 |               15 |            4728 | minute       | nan                        |
+| ai_picu_meds.csv             | WARD_IN_dttm          | str     |        331165 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-01-30 20:30:00 | 2023-05-19 16:46:12 |               15 |            3051 | second       | nan                        |
+| ai_picu_meds.csv             | WARD_OUT_dttm         | str     |        330588 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-02-16 11:25:00 | 2023-05-21 18:39:11 |               15 |            3089 | second       | nan                        |
+| ai_picu_piccanet.csv         | AdDateTime            | str     |          4432 | ddaaadddd:dd:dd:dd     | SAS datetime DDMONYYYY:HH:MM:SS    | 2013-01-02 15:25:00 | 2022-12-31 04:20:00 |               10 |            2456 | minute       | nan                        |
+| ai_picu_piccanet.csv         | AdDate                | str     |          4432 | ddaaadddd              | generic, day-first                 | 2013-01-02 00:00:00 | 2022-12-31 00:00:00 |               10 |            2456 | date only    | nan                        |
+| ai_picu_piccanet.csv         | AdTime                | str     |          4432 | d:dd                   | nan                                | NaT                 | NaT                 |              nan |             nan | nan          | time of day only (no date) |
+| ai_picu_piccanet.csv         | UnitDisDateTime       | str     |          4432 | ddaaadddd:dd:dd:dd     | SAS datetime DDMONYYYY:HH:MM:SS    | 2013-01-02 13:30:00 | 2022-12-31 08:58:00 |               10 |            2456 | minute       | nan                        |
+| ai_picu_piccanet_old.csv     | AdDateTime            | str     |          7116 | ddaaadddd:dd:dd:dd     | SAS datetime DDMONYYYY:HH:MM:SS    | 2013-01-01 19:00:00 | 2022-12-31 19:40:00 |               10 |            2540 | minute       | nan                        |
+| ai_picu_piccanet_old.csv     | AdDate                | str     |          7116 | ddaaadddd              | generic, day-first                 | 2013-01-01 00:00:00 | 2022-12-31 00:00:00 |               10 |            2540 | date only    | nan                        |
+| ai_picu_piccanet_old.csv     | AdTime                | str     |          7116 | dd:dd                  | nan                                | NaT                 | NaT                 |              nan |             nan | nan          | time of day only (no date) |
+| ai_picu_piccanet_old.csv     | UnitDisDateTime       | str     |          7116 | ddaaadddd:dd:dd:dd     | SAS datetime DDMONYYYY:HH:MM:SS    | 2013-01-01 12:33:00 | 2022-12-31 15:30:00 |               10 |            2540 | minute       | nan                        |
+| ai_picu_sedation.csv         | chartTime             | str     |       1193315 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2012-12-18 15:20:00 | 2023-09-05 23:35:00 |               12 |            3847 | minute       | nan                        |
+| ai_picu_sedation.csv         | WARD_IN_dttm          | str     |       1193315 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2012-12-18 14:40:00 | 2023-09-04 18:22:18 |               12 |            2730 | second       | nan                        |
+| ai_picu_sedation.csv         | WARD_OUT_dttm         | str     |       1192050 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2012-12-19 12:30:00 | 2023-10-02 09:30:14 |               12 |            2754 | second       | nan                        |
+| ai_picu_sedation_old.csv     | chartTime             | str     |        484111 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-05-15 14:05:00 | 2023-02-03 17:00:00 |               15 |            3378 | minute       | nan                        |
+| ai_picu_sedation_old.csv     | WARD_IN_dttm          | str     |        484111 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-05-15 02:30:00 | 2023-02-02 10:33:24 |               15 |            1838 | second       | nan                        |
+| ai_picu_sedation_old.csv     | WARD_OUT_dttm         | str     |        483858 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-05-19 20:00:00 | 2023-02-07 18:34:29 |               15 |            1830 | second       | nan                        |
+| ai_picu_temp.csv             | chartTime             | str     |        912986 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-01-23 14:35:00 | 2023-05-18 04:00:00 |               15 |            4830 | second       | nan                        |
+| ai_picu_temp.csv             | WARD_IN_dttm          | str     |        921045 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_vent.csv             | chartTime             | str     |       1698052 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-01-23 14:35:00 | 2023-05-23 01:00:00 |               15 |            4864 | second       | nan                        |
+| ai_picu_vent.csv             | WARD_IN_dttm          | str     |       1705956 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_vent.csv             | WARD_OUT_dttm         | str     |       1698484 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-12-06 00:00:00 | 2023-05-21 18:39:11 |               34 |            8133 | second       | nan                        |
+| ai_picu_vitals.csv           | chartTime             | str     |       1949287 | ddaaadddd:dd:dd:dd.ddd | SAS datetime DDMONYYYY:HH:MM:SS.ff | 2009-01-23 14:35:00 | 2023-05-23 00:00:00 |               15 |            4852 | second       | nan                        |
+| ai_picu_vitals.csv           | WARD_IN_dttm          | str     |       1957204 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-09-24 00:00:00 | 2023-05-19 16:46:12 |               34 |            8029 | second       | nan                        |
+| ai_picu_vitals.csv           | WARD_OUT_dttm         | str     |       1949585 | ddaaadddd:dd:dd:dd.dd  | SAS datetime DDMONYYYY:HH:MM:SS.ff | 1990-12-06 00:00:00 | 2023-05-21 18:39:11 |               34 |            8133 | second       | nan                        |
 
