@@ -8,3 +8,4 @@ derived/
 # notebook and Python clutter
 .ipynb_checkpoints/
 __pycache__/
+reports/
