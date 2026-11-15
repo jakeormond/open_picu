@@ -1,0 +1,10 @@
+# row-level data stays in the SDE
+derived/
+*.csv
+*.parquet
+*.pkl
+*.feather
+
+# notebook and Python clutter
+.ipynb_checkpoints/
+__pycache__/
