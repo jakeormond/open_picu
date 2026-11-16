@@ -20,6 +20,7 @@ Privacy / anonymisation planning:
 No row-level data is returned. ID-like columns get counts only.
 """
 import re
+import time
 import warnings
 from datetime import date
 from pathlib import Path
@@ -35,6 +36,10 @@ MAX_LEN = 40      # ...and the average string length is at most this
 
 
 def read(path, max_rows=None, usecols=None):
+    """Read a CSV (utf-8, else latin-1) or a parquet file. Returns (DataFrame, encoding)."""
+    if str(path).lower().endswith(".parquet"):
+        df = pd.read_parquet(path, columns=usecols)
+        return (df.head(max_rows) if max_rows else df), "parquet"
     for enc in ("utf-8", "latin-1"):
         try:
             df = pd.read_csv(path, low_memory=False, encoding=enc, nrows=max_rows,
@@ -83,6 +88,8 @@ def parse_dates(s):
     then a per-shape fallback for columns that mix formats.
     ISO is tried before day-first on purpose: pandas with dayfirst=True can guess
     YYYY-DD-MM from an ambiguous first value and then fail on most of the column."""
+    if pd.api.types.is_datetime64_any_dtype(s):      # e.g. from a parquet file
+        return s, "native datetime"
     n = s.notna().sum()
     for fmt, name in SAS_FMTS:
         parsed = pd.to_datetime(s, format=fmt, errors="coerce")
@@ -166,32 +173,109 @@ def df_text(df, index=True):
         return df.to_string(index=index)
 
 
-def inventory_site(csv_dir, max_rows=None):
-    """Profile every CSV in csv_dir. Returns a dict of DataFrames and ID sets."""
-    files = sorted(Path(csv_dir).expanduser().glob("*.csv"))
+def list_files(folder):
+    """Every file under folder, any depth and any format: path (relative), type, size, depth.
+    Use it first on a new site, to see what is there before profiling."""
+    root = Path(folder).expanduser()
+    rows = [{"path": p.relative_to(root).as_posix(), "type": p.suffix.lower() or "(none)",
+             "size MB": round(p.stat().st_size / 1e6, 1), "depth": len(p.relative_to(root).parts) - 1}
+            for p in sorted(root.rglob("*")) if p.is_file()]
+    return pd.DataFrame(rows)
+
+
+def _inventory_file(args):
+    """Profile one file (worker for inventory_site; top-level so it can run in a subprocess)."""
+    f, root, max_rows = args
+    t0 = time.time()
+    name = Path(f).relative_to(root).as_posix()
+    df, enc = read(f, max_rows)
+    summary = {"file": name, "size MB": round(Path(f).stat().st_size / 1e6, 1), "rows": len(df),
+               "columns": df.shape[1], "duplicate rows": int(df.duplicated().sum()), "encoding": enc}
+    prof = pd.DataFrame([profile_column(df[c], c) for c in df.columns])
+    details = dict(zip(prof["column"], prof["detail"]))
+    uniq = dict(zip(prof["column"], prof["unique"]))            # nunique once, reused below
+    dates = [date_row(name, c, df[c]) for c in df.columns if _is_date_col(c, details[c])]
+    col_files, ids = {}, {}
+    for c in df.columns:
+        key = c.strip().lower()
+        col_files[key] = uniq[c]
+        if ID_HINT.search(c) and uniq[c] < 5_000_000:
+            ids[key] = set(df[c].dropna().unique())
+    summary["seconds"] = round(time.time() - t0)
+    return name, summary, prof, dates, col_files, ids
+
+
+def inventory_site(csv_dir, max_rows=None, recursive=False, exclude=None, n_jobs=1):
+    """Profile every CSV (and parquet) in csv_dir. Returns a dict of DataFrames and ID sets.
+    recursive=True also takes files in subfolders; files are then named by their path
+    relative to csv_dir (e.g. "sub/inner/file.csv"), and that name is the key everywhere
+    (profiles, id_sets, `base=` arguments).
+    exclude: regex on the relative path; matching files are skipped (e.g. r"lab_components").
+    n_jobs: files profiled in parallel processes. Each worker holds one whole file in
+    memory, so keep n_jobs small when there are multi-GB files.
+    inv["summary"] has a `seconds` column, to see which files dominate the run time."""
+    root = Path(csv_dir).expanduser()
+    files = sorted(p for p in (root.rglob("*") if recursive else root.glob("*"))
+                   if p.is_file() and p.suffix.lower() in (".csv", ".parquet")
+                   and ".ipynb_checkpoints" not in p.parts
+                   and not (exclude and re.search(exclude, p.relative_to(root).as_posix())))
+    jobs = [(f, root, max_rows) for f in files]
+    if n_jobs > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=n_jobs) as ex:
+            results = []
+            for r in ex.map(_inventory_file, jobs):
+                print(f"{r[0]}: {r[1]['rows']} rows x {r[1]['columns']} cols ({r[1]['seconds']} s)")
+                results.append(r)
+    else:
+        results = []
+        for j in jobs:
+            r = _inventory_file(j)
+            print(f"{r[0]}: {r[1]['rows']} rows x {r[1]['columns']} cols ({r[1]['seconds']} s)")
+            results.append(r)
     summary, profiles, col_files, id_sets, date_rows = [], {}, {}, {}, []
-    for f in files:
-        df, enc = read(f, max_rows)
-        print(f"{f.name}: {len(df)} rows x {df.shape[1]} cols")
-        summary.append({
-            "file": f.name,
-            "size MB": round(f.stat().st_size / 1e6, 1),
-            "rows": len(df),
-            "columns": df.shape[1],
-            "duplicate rows": int(df.duplicated().sum()),
-            "encoding": enc,
-        })
-        profiles[f.name] = pd.DataFrame([profile_column(df[c], c) for c in df.columns])
-        details = dict(zip(profiles[f.name]["column"], profiles[f.name]["detail"]))
-        date_rows += [date_row(f.name, c, df[c]) for c in df.columns if _is_date_col(c, details[c])]
-        for c in df.columns:
-            key = c.strip().lower()
-            col_files.setdefault(key, {})[f.name] = int(df[c].nunique())
-            if ID_HINT.search(c) and df[c].nunique() < 5_000_000:
-                id_sets.setdefault(f.name, {})[key] = set(df[c].dropna().unique())
+    for name, s, prof, dates, cf, ids in results:
+        summary.append(s)
+        profiles[name] = prof
+        date_rows += dates
+        for key, n in cf.items():
+            col_files.setdefault(key, {})[name] = n
+        if ids:
+            id_sets[name] = ids
     return {"summary": pd.DataFrame(summary), "profiles": profiles,
             "col_files": col_files, "id_sets": id_sets,
             "dates": pd.DataFrame(date_rows), "csv_dir": str(csv_dir)}
+
+
+def save_inventory(inv, path):
+    """Pickle an inventory so it need not be rerun. It contains the ID values themselves
+    (id_sets), so it is row-level data: save it only in the git-ignored derived/ folder."""
+    import pickle
+    with open(path, "wb") as fh:
+        pickle.dump(inv, fh)
+
+
+def load_inventory(path):
+    import pickle
+    with open(path, "rb") as fh:
+        return pickle.load(fh)
+
+
+def schema_groups(inv):
+    """Group files that have exactly the same columns (one CSV per variable is common).
+    One row per group: the columns, number of files, total rows, folders, and a first
+    file to look at in inv["profiles"]. Far shorter to read than 100+ profiles."""
+    rows_per = inv["summary"].set_index("file")["rows"]
+    groups = {}
+    for fn, prof in inv["profiles"].items():
+        groups.setdefault(tuple(prof["column"]), []).append(fn)
+    out = []
+    for cols, fns in groups.items():
+        out.append({"columns": ", ".join(cols), "n files": len(fns),
+                    "total rows": int(rows_per[fns].sum()),
+                    "folders": ", ".join(sorted({fn.rsplit("/", 1)[0] if "/" in fn else "(top)" for fn in fns})),
+                    "first file": fns[0]})
+    return pd.DataFrame(out).sort_values("n files", ascending=False).reset_index(drop=True)
 
 
 def shared_columns(inv):
