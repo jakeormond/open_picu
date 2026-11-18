@@ -16,6 +16,7 @@ open_picu/
     assemble.py          cut every table to the manifest stays; exact-duplicate removal; assembly log
     static.py            one row per stay, one schema across sites; pooled static table
     smh_mappings.py      SMH interventionId / attributeId / materialId mappings and the extraction SQL record
+    harmonise.py         cohort rule, one clock (hours since t0), units and cleaning rules; long tables per site and concept group
     concepts.py          cross-site concept map (101 concepts incl. 24 drugs): which measurements exist at all three sites, ranges, coverage by year, availability patterns
   notebooks/             one notebook per analysis step
     rbh_inventory, smh_inventory, gosh_inventory, manifest, assemble (also builds the static tables), concepts, concepts_checks

@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
+import inventory as I
 import smh_mappings as SM
 
 SITES = ("RBH", "SMH", "GOSH")
@@ -299,27 +300,41 @@ def _src_label(site, src):
     return ".".join(str(x) for x in src[:2]) + (f"[{','.join(src[3])}]" if len(src) > 2 else "")
 
 
-def _read(assembled_dir, site, src):
-    """Rows (stay, value) for one source. For SMH value is None for the io table and for name-matched drug sources (presence only).
-    Sources with a label column keep only the rows whose label matches (see _label_mask)."""
+TIME_CANDIDATES = ["observation_datetime", "utcChartTime", "SampleCollectDateTime", "start_datetime", "hour_start", "chartTime", "chart_time"]
+
+
+def _to_dt(s):
+    """Row times as datetimes, whatever the site's format (SAS-style at RBH, ISO or day-first elsewhere): the study's own parser."""
+    s = s.astype("string").str.strip()
+    return I.parse_dates(s.mask(s.str.lower().isin(MISSING)))[0]
+
+
+def time_column(path):
+    """The row-time column of an assembled table: the first of TIME_CANDIDATES present (case-insensitive)."""
+    names = {n.lower(): n for n in pq.ParquetFile(path).schema.names}
+    for c in TIME_CANDIDATES:
+        if c.lower() in names:
+            return names[c.lower()]
+    raise KeyError(f"{Path(path).name}: no time column among {TIME_CANDIDATES}")
+
+
+def _read(assembled_dir, site, src, time=False):
+    """Rows (stay, value) for one source; with time=True also t (the raw row time, text). For SMH value is None for the io table
+    and for name-matched drug sources (presence only). Sources with a label column keep only the rows whose label matches
+    (see _label_mask)."""
     base = Path(assembled_dir) / site
-    if site == "RBH":
-        table, col = src[0], src[1]
-        p = base / f"ai_picu_{table}.parquet"
-        want = (STAY["RBH"], col) + ((src[2],) if len(src) > 2 else ())
+    if site in ("RBH", "GOSH"):
+        if site == "RBH":
+            p = base / f"ai_picu_{src[0]}.parquet"
+        else:
+            p = base / f"{src[0]}.parquet"
+        col = src[1]
+        tcol = time_column(p) if time else None
+        want = (STAY[site], col) + ((src[2],) if len(src) > 2 else ()) + ((tcol,) if tcol else ())
         df = pd.read_parquet(p, columns=SM._cols(p, want))
-        df.columns = ["stay", "value"] + (["label"] if len(src) > 2 else [])
+        df.columns = ["stay", "value"] + (["label"] if len(src) > 2 else []) + (["t"] if tcol else [])
         if len(src) > 2:
-            df = df[_label_mask(df["label"], src[3])][["stay", "value"]]
-        return df
-    if site == "GOSH":
-        file, col = src[0], src[1]
-        p = base / f"{file}.parquet"
-        want = (STAY["GOSH"], col) + ((src[2],) if len(src) > 2 else ())
-        df = pd.read_parquet(p, columns=SM._cols(p, want))
-        df.columns = ["stay", "value"] + (["label"] if len(src) > 2 else [])
-        if len(src) > 2:
-            df = df[_label_mask(df["label"], src[3])][["stay", "value"]]
+            df = df[_label_mask(df["label"], src[3])].drop(columns="label")
         return df
     if len(src) == 3:                                      # SMH, by drug name: (table, name column, [labels])
         p = SM._path(base, src[0])
@@ -330,14 +345,15 @@ def _read(assembled_dir, site, src):
     p = SM._path(base, table)
     keys = SM.KEY.get(table, ("interventionId",))
     vcol = None if table == "io" else "terseForm"
-    want = ("encounterId",) + keys + ((vcol,) if vcol else ())
+    tcol = time_column(p) if time else None
+    want = ("encounterId",) + keys + ((vcol,) if vcol else ()) + ((tcol,) if tcol else ())
     df = pd.read_parquet(p, columns=SM._cols(p, want))
-    df.columns = ["stay"] + list(keys) + (["value"] if vcol else [])
+    df.columns = ["stay"] + list(keys) + (["value"] if vcol else []) + (["t"] if tcol else [])
     ids = df[keys[0]].astype("string").str.strip()
     for k in keys[1:]:
         ids = ids + "_" + df[k].astype("string").str.strip()
     out = df[ids.isin(SM.MAPPINGS[table][concept])]
-    out = out[["stay"] + (["value"] if vcol else [])]
+    out = out[["stay"] + (["value"] if vcol else []) + (["t"] if tcol else [])]
     if not vcol:
         out = out.assign(value=PRESENT)
     return out
@@ -549,7 +565,7 @@ def names_by_year(assembled_dir, site, table, column, time_col, names=None, min_
     if names is None:
         names = df.groupby("label")["stay"].nunique().sort_values(ascending=False).head(top).index
     df = df[df["label"].isin(list(names))]
-    df["year"] = pd.to_datetime(df["t"], errors="coerce", format="mixed").dt.year
+    df["year"] = _to_dt(df["t"]).dt.year
     out = df.groupby(["year", "label"])["stay"].nunique().unstack("label").fillna(0).astype(int)
     out = out.where(out >= min_stays)
     out["unparsed_time_rows"] = int(df["year"].isna().sum())
@@ -616,7 +632,7 @@ def interval_check(assembled_dir, site, table, label_col, start_col, end_col, mi
     df = pd.read_parquet(p, columns=SM._cols(p, (stay, label_col, start_col, end_col)))
     df.columns = ["stay", "label", "s", "e"]
     df = df[_present(df["label"])]
-    hrs = (pd.to_datetime(df["e"], errors="coerce", format="mixed") - pd.to_datetime(df["s"], errors="coerce", format="mixed")).dt.total_seconds() / 3600
+    hrs = (_to_dt(df["e"]) - _to_dt(df["s"])).dt.total_seconds() / 3600
     df = df.assign(h=hrs)
     out = df.groupby("label").agg(rows=("h", "size"), stays=("stay", "nunique"), median_h=("h", "median"), max_h=("h", "max"))
     out["pct_le_1h"] = df.groupby("label")["h"].apply(lambda x: round(100 * (x <= 1.01).mean(), 1))
@@ -636,7 +652,7 @@ def _io_read(assembled_dir, ids):
     df.columns = ["stay", "id", "t", "hour", "cum", "reset"]
     df["id"] = df["id"].astype("string").str.strip()
     df = df[df["id"].isin([str(i) for i in ids])].copy()
-    df["t"] = pd.to_datetime(df["t"], errors="coerce", format="mixed")
+    df["t"] = _to_dt(df["t"])
     for c in ("hour", "cum", "reset"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.drop_duplicates()
@@ -696,7 +712,7 @@ def cum_check(assembled_dir, site, table, label_col, labels, time_col, value_col
     df = pd.read_parquet(p, columns=SM._cols(p, (stay, label_col, time_col, value_col)))
     df.columns = ["stay", "label", "t", "v"]
     df = df[df["label"].isin(labels)].copy()
-    df["t"] = pd.to_datetime(df["t"], errors="coerce", format="mixed")
+    df["t"] = _to_dt(df["t"])
     df["v"] = pd.to_numeric(df["v"], errors="coerce")
     rows = []
     for lab, g in df.sort_values(["stay", "t"]).groupby("label"):
@@ -723,7 +739,7 @@ def caboodle_check(assembled_dir, table="July2026extraction_by_alex__pAIC__merge
     df.columns = ["stay", "t", "hi", "ho", "di", "do"]
     for c in ("hi", "ho", "di", "do"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["t"] = pd.to_datetime(df["t"], errors="coerce", format="mixed")
+    df["t"] = _to_dt(df["t"])
     df = df.sort_values(["stay", "t"])
     same = df["stay"].eq(df["stay"].shift())
     changed = same & (df["di"].ne(df["di"].shift()) | df["do"].ne(df["do"].shift()))
@@ -926,3 +942,67 @@ def be_derive_check(assembled_dir, site):
             print(f"  {name}: derived minus recorded: median {diff.median():.2f}, p5 {diff.quantile(.05):.2f}, p95 {diff.quantile(.95):.2f}; "
                   f"within 1: {100 * (diff.abs() <= 1).mean():.1f}%, within 2: {100 * (diff.abs() <= 2).mean():.1f}%; "
                   f"same sign when |recorded| >= 2: {100 * same_sign:.1f}%")
+
+
+RBH_INTAKE_PARTS = ["IV_Infusion", "IV_Meds", "Colloids", "Blood_In", "Enteral_PO", "PO_NG_Intake", "TPN"]
+RBH_BOLUS = ["bolus_CSL", "bolus_NACL", "bolus_ISOPLEX", "bolus_PLASMALYTE", "bolus_ALBUMIN5", "bolus_ALBUMIN20"]
+
+
+def rbh_io_reconcile(assembled_dir, total="Total_In_ex_dialysis", parts=RBH_INTAKE_PARTS, bolus=RBH_BOLUS, tol=1.0, top=8, sample=300_000):
+    """Which RBH io columns add up to the total intake? Treats the bolus columns as one component ('bolus_all'). For stay-hours with a
+    positive total, the share of hours where the total equals the sum of each subset of components (missing = 0, tolerance `tol` ml),
+    best subsets first, plus how often each component is non-zero and the share of hours where the total exceeds the full sum.
+    Counts and shares only."""
+    from itertools import combinations
+    p = Path(assembled_dir) / "RBH" / "ai_picu_io.parquet"
+    cols = [total] + list(parts) + list(bolus)
+    df = pd.read_parquet(p, columns=SM._cols(p, cols))
+    df.columns = cols
+    df = df.apply(pd.to_numeric, errors="coerce")
+    df = df[df[total] > 0]
+    if len(df) > sample:
+        df = df.sample(sample, random_state=0)
+    comp = df[list(parts)].fillna(0).copy()
+    comp["bolus_all"] = df[list(bolus)].fillna(0).sum(axis=1)
+    names = list(comp.columns)
+    t = df[total].to_numpy()
+    print(f"{len(df):,} stay-hours with a positive {total} (sample of at most {sample:,})")
+    print("share of hours with a non-zero value, by component:",
+          {n: round(100 * float((comp[n] != 0).mean()), 1) for n in names})
+    print(f"total above the sum of all components in {100 * float((t > comp.sum(axis=1).to_numpy() + tol).mean()):.1f}% of hours; "
+          f"below it in {100 * float((t < comp.sum(axis=1).to_numpy() - tol).mean()):.1f}%")
+    res = []
+    for r in range(1, len(names) + 1):
+        for sub in combinations(names, r):
+            s = comp[list(sub)].sum(axis=1).to_numpy()
+            res.append((float((np.abs(t - s) <= tol).mean()), sub))
+    res.sort(key=lambda x: (-x[0], len(x[1])))
+    for share, sub in res[:top]:
+        print(f"  {100 * share:5.1f}%  {' + '.join(sub)}")
+
+
+def rbh_io_by_year(assembled_dir, subset=("IV_Infusion", "IV_Meds", "Colloids", "Blood_In", "Enteral_PO"), total="Total_In_ex_dialysis",
+                   others=("PO_NG_Intake", "TPN"), tol=1.0, sample=400_000):
+    """Does the RBH intake total change meaning over time? For stay-hours with a positive total, by year of the row time: the number of
+    hours, the share where the total equals the sum of `subset` (1 ml tolerance, missing = 0), the share where the total is above and
+    below that sum, and the share of hours with a non-zero value in each column of `subset` and `others`. Counts and shares only."""
+    p = Path(assembled_dir) / "RBH" / "ai_picu_io.parquet"
+    cols = ["chartTime", total] + list(subset) + list(others)
+    df = pd.read_parquet(p, columns=SM._cols(p, cols))
+    df.columns = cols
+    for c in cols[1:]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df[df[total] > 0]
+    if len(df) > sample:
+        df = df.sample(sample, random_state=0)
+    df["year"] = _to_dt(df["chartTime"]).dt.year
+    s = df[list(subset)].fillna(0).sum(axis=1)
+    df["equal"] = (df[total] - s).abs() <= tol
+    df["above"] = df[total] > s + tol
+    df["below"] = df[total] < s - tol
+    g = df.groupby("year")
+    out = pd.DataFrame({"hours": g.size(), "pct_equal": 100 * g["equal"].mean(), "pct_total_above": 100 * g["above"].mean(),
+                        "pct_total_below": 100 * g["below"].mean()})
+    for c in list(subset) + list(others):
+        out[f"nz_{c}"] = 100 * g[c].apply(lambda x: (x.fillna(0) != 0).mean())
+    return out.round(1)

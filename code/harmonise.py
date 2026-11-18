@@ -23,7 +23,7 @@ Rules (all from DATA_ISSUES.md):
   - I:E ratio is x of "1:x": RBH parses the text "a:b" as b / a; SMH takes the larger of the two rows at a time (the pair is 1 and x;
     a single row counts only if above 1); GOSH uses the expiratory part.
   - Text concepts are carried as recorded in value_text, not harmonised (vocabularies differ by site).
-Not done here: fluids (own definitions, harmonise_fluids) and drugs (presence only, kept in the availability step).
+Fluids are in harmonise_fluids (own definitions, below). Drugs are not here (presence only, kept in the availability step).
 Counts only leave the SDE: the report returned by harmonise_all has no values.
 """
 from pathlib import Path
@@ -57,7 +57,11 @@ def cohort(static, min_hours=MIN_HOURS):
 def to_hours(t_text, site, t0_utc):
     """Hours since t0 for text times: parsed, put on UTC (SMH is UTC already, the others London local), minus t0_utc (a Series aligned
     to t_text). Unparseable or ambiguous times give NaN."""
-    t = ST._dt(t_text)
+    return _hours_from_parsed(ST._dt(t_text), site, t0_utc)
+
+
+def _hours_from_parsed(t, site, t0_utc):
+    """As to_hours, for times that are already datetimes."""
     if site == "SMH":
         tu = t.dt.tz_localize("UTC")
     else:
@@ -119,7 +123,7 @@ def _read_concept(assembled_dir, site, concept, keep, report):
             bad = df["value"].isna()
             report["rows_non_numeric"] += int(bad.sum())
             df = df[~bad]
-        parts.append(df[["stay", "hour", "value", "value_text"]].assign(source=i))
+        parts.append(df[["stay", "hour", "value", "value_text"]].assign(source=str(i)))
     out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["stay", "hour", "value", "value_text", "source"])
     return out.rename(columns={"stay": "stay_key"})
 
@@ -143,7 +147,7 @@ def harmonise_concept(assembled_dir, site, concept, keep, report=None):
         hco3 = _paired(assembled_dir, site, "bg_hco3", keep).rename(columns={"value": "hco3"})
         m = ph.merge(hco3, on=["stay_key", "hour"])
         m = m[m["ph"].between(6.5, 7.8) & m["hco3"].between(1, 60)]
-        df = m.assign(value=C.derive_base_excess(m["ph"], m["hco3"]), value_text=pd.NA, source=0)[["stay_key", "hour", "value", "value_text", "source"]]
+        df = m.assign(value=C.derive_base_excess(m["ph"], m["hco3"]), value_text=pd.NA, source="0")[["stay_key", "hour", "value", "value_text", "source"]]
         flag = "derived"
         rep["rows_derived"] += len(df)
     else:
@@ -229,3 +233,152 @@ def time_alignment_check(assembled_dir, static, concept="hr", sites=C.SITES):
                         "p5": round(float(f.quantile(.05)), 2), "p95": round(float(f.quantile(.95)), 2),
                         "pct_before_t0": round(100 * float((f < 0).mean()), 1), "pct_after_24h": round(100 * float((f > 24).mean()), 1)})
     return pd.DataFrame(out)
+
+
+# ====================================================================================================================================
+# Fluids: hourly ml (value = the hourly amount recorded at `hour`; which end of the hour each source's time marks is not documented), long format.
+#   intake_total   RBH Total_In_ex_dialysis (as recorded); SMH io 'Total In 24hr' hourTotal; GOSH differenced Total_fluids (pre-Epic)
+#                  and caboodle hourly_intake_ml (Epic era)
+#   intake_iv      IV infusion + colloids + drug volume, without blood products, enteral or TPN. RBH IV_Infusion + IV_Meds + Colloids;
+#                  SMH ids 1851 + 2047 + 2101 (hourTotal); not at GOSH (totals only). May under-count at RBH up to about 2016 (R6).
+#   output_total, urine_output (RBH, SMH), net_balance (RBH Net_Body_Balance, SMH balance ids; GOSH: differenced LOS Net Body Balance and
+#                  caboodle intake minus output).
+# GOSH pre-Epic: hourly = this row minus the previous one of the stay; at a fall of a running total that resets (the 24 h totals) the value
+# itself; the first row of a stay has no previous and is dropped. `flag` 'gap' marks an amount that spans more than 1.5 h.
+# Nothing is removed: `flag` 'outlier' marks hours above the `percentile` of |ml per kg| per site and concept (needs the stay's weight).
+# ====================================================================================================================================
+CABOODLE = "July2026extraction_by_alex__pAIC__merged_balance__caboodle_fluid_balance"
+SMH_FLUID_IDS = {"intake_total": "fluidIn", "output_total": "fluidOut", "urine_output": "urineOutput", "net_balance": "fluidBalance"}
+SMH_IV_IDS = ["ivInfusionTotal", "colloids", "drugVolumeTotal"]
+GAP_HOURS = 1.5
+
+
+def _fluid_frame(df, site, concept, source, keep, rep):
+    """df: stay, t (text), value -> long frame in cohort with hours; counts updated."""
+    df = df.copy()
+    df["stay"] = df["stay"].astype(str)
+    rep["rows_read"] += len(df)
+    df = df[df["stay"].isin(keep.index)]
+    rep["rows_in_cohort"] += len(df)
+    df["hour"] = _hours_from_parsed(C._to_dt(df["t"]) if df["t"].dtype != "datetime64[ns]" else df["t"], site, df["stay"].map(keep))
+    rep["rows_bad_time"] += int(df["hour"].isna().sum())
+    df = df.dropna(subset=["hour", "value"])
+    if "flag" not in df:
+        df["flag"] = ""
+    return pd.DataFrame({"stay_key": df["stay"], "concept": concept, "hour": df["hour"], "value": df["value"].astype(float),
+                         "value_text": pd.NA, "flag": df["flag"], "source": source})
+
+
+def _num(s):
+    return pd.to_numeric(_clean_text(s), errors="coerce")
+
+
+def _fluids_rbh(assembled_dir, keep, rep):
+    p = Path(assembled_dir) / "RBH" / "ai_picu_io.parquet"
+    cols = ["stay_key", "chartTime", "Total_In_ex_dialysis", "IV_Infusion", "IV_Meds", "Colloids", "Total_Out_ex_dialysis", "Urine_Output", "Net_Body_Balance"]
+    df = pd.read_parquet(p, columns=C.SM._cols(p, cols))
+    df.columns = ["stay", "t"] + cols[2:]
+    for c in cols[2:]:
+        df[c] = _num(df[c])
+    df["intake_iv"] = df[["IV_Infusion", "IV_Meds", "Colloids"]].sum(axis=1, min_count=1)
+    m = {"intake_total": "Total_In_ex_dialysis", "intake_iv": "intake_iv", "output_total": "Total_Out_ex_dialysis",
+         "urine_output": "Urine_Output", "net_balance": "Net_Body_Balance"}
+    return [_fluid_frame(df[["stay", "t"]].assign(value=df[col]), "RBH", c, "rbh_io", keep, rep) for c, col in m.items()]
+
+
+def _fluids_smh(assembled_dir, keep, rep):
+    base = Path(assembled_dir) / "SMH"
+    p = C.SM._path(base, "io")
+    cols = ["encounterId", "interventionId", "utcChartTime", "hourTotal"]
+    df = pd.read_parquet(p, columns=C.SM._cols(p, cols))
+    df.columns = ["stay", "id", "t", "value"]
+    df["id"] = df["id"].astype("string").str.strip()
+    df["value"] = _num(df["value"])
+    df = df.dropna(subset=["value"]).drop_duplicates(["stay", "id", "t", "value"])
+    out = []
+    for c, key in SMH_FLUID_IDS.items():
+        sub = df[df["id"].isin(C.SM.IO[key])].groupby(["stay", "t"], sort=False)["value"].first().reset_index()
+        out.append(_fluid_frame(sub, "SMH", c, "smh_io", keep, rep))
+    ids = [i for k in SMH_IV_IDS for i in C.SM.IO[k]]
+    sub = df[df["id"].isin(ids)].groupby(["stay", "t", "id"], sort=False)["value"].first().groupby(["stay", "t"], sort=False).sum().reset_index()
+    out.append(_fluid_frame(sub, "SMH", "intake_iv", "smh_io", keep, rep))
+    return out
+
+
+def _differenced(df, resets):
+    """df: stay, t (parsed), cum. Hourly amounts from a running total, per stay in time order. resets=True: a fall is a reset and the value
+    itself is the amount (the 24 h totals); False: a plain difference (the stay-long balance, which can fall)."""
+    df = df.sort_values(["stay", "t"]).drop_duplicates(["stay", "t", "cum"])
+    g = df.groupby("stay", sort=False)
+    prev, prev_t = g["cum"].shift(1), g["t"].shift(1)
+    d = df.assign(prev=prev, gap=(df["t"] - prev_t).dt.total_seconds() / 3600).dropna(subset=["prev"])
+    val = d["cum"] - d["prev"]
+    if resets:
+        val = val.where(d["cum"] >= d["prev"], d["cum"])
+    return d.assign(value=val, flag=np.where(d["gap"] > GAP_HOURS, "gap", ""))[["stay", "t", "value", "flag"]]
+
+
+def _fluids_gosh(assembled_dir, keep, rep):
+    base = Path(assembled_dir) / "GOSH"
+    out = []
+    for table, label, concept, resets in ((C._BAL + "Total_fluids", "Total Fluids In (24hrs)", "intake_total", True),
+                                          (C._BAL + "Total_fluids", "Total Fluids Out (24hrs)", "output_total", True),
+                                          (C._BAL + "Net_Bal", "LOS Net Body Balance", "net_balance", False)):
+        p = base / f"{table}.parquet"
+        df = pd.read_parquet(p, columns=C.SM._cols(p, ("stay_id", "start_datetime", "shortLabel", "cumTotal")))
+        df.columns = ["stay", "t", "label", "cum"]
+        df = df[df["label"] == label].drop(columns="label")
+        df["stay"] = df["stay"].astype(str)
+        df = df[df["stay"].isin(keep.index)]
+        df["cum"] = _num(df["cum"])
+        df["t"] = C._to_dt(df["t"])
+        d = _differenced(df.dropna(subset=["cum", "t"]), resets)
+        out.append(_fluid_frame(d, "GOSH", concept, "gosh_diff", keep, rep))
+    p = base / f"{CABOODLE}.parquet"
+    df = pd.read_parquet(p, columns=C.SM._cols(p, ("stay_id", "hour_start", "hourly_intake_ml", "hourly_output_ml")))
+    df.columns = ["stay", "t", "i", "o"]
+    df["i"], df["o"] = _num(df["i"]), _num(df["o"])
+    out.append(_fluid_frame(df[["stay", "t"]].assign(value=df["i"]), "GOSH", "intake_total", "gosh_caboodle", keep, rep))
+    out.append(_fluid_frame(df[["stay", "t"]].assign(value=df["o"]), "GOSH", "output_total", "gosh_caboodle", keep, rep))
+    out.append(_fluid_frame(df[["stay", "t"]].assign(value=df["i"] - df["o"]), "GOSH", "net_balance", "gosh_caboodle", keep, rep))
+    return out
+
+
+def harmonise_fluids(assembled_dir, static, out_dir, percentile=99.9, sites=C.SITES):
+    """Write {site}_fluids.parquet to out_dir and return (report, caps). `hour` is the time of the hourly record.
+    report: per site, concept and source: stays, rows, rows read, outside cohort, bad time, rows flagged gap and outlier.
+    caps: per site and concept the cap (ml per kg per hour at the `percentile`) used for the 'outlier' flag, the share of rows above it, and
+          the 99th, 99.99th percentile and maximum of the same quantity, as a check that the cap is not arbitrary. Counts and ratios only."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    co = cohort(static)
+    w = static.assign(stay_key=static["stay_key"].astype(str)).set_index(["site", "stay_key"])["weight_kg"]
+    builders = {"RBH": _fluids_rbh, "SMH": _fluids_smh, "GOSH": _fluids_gosh}
+    rows, caps = [], []
+    for site in sites:
+        keep = co[co["site"] == site].set_index("stay_key")["t0_utc"]
+        rep = {"rows_read": 0, "rows_in_cohort": 0, "rows_bad_time": 0}
+        df = pd.concat(builders[site](assembled_dir, keep, rep), ignore_index=True)
+        wt = pd.Series(list(zip([site] * len(df), df["stay_key"])), index=df.index).map(w)
+        perkg = (df["value"].abs() / wt.where(wt > 0))
+        df["flag"] = df["flag"].astype(str)
+        for c in df["concept"].unique():
+            m = (df["concept"] == c) & perkg.notna() & (df["value"] != 0)
+            if m.sum() == 0:
+                continue
+            cap = float(perkg[m].quantile(percentile / 100))
+            above = m & (perkg > cap)
+            df.loc[above, "flag"] = np.where(df.loc[above, "flag"] == "", "outlier", df.loc[above, "flag"] + "+outlier")
+            caps.append({"site": site, "concept": c, "weighted_nonzero_rows": int(m.sum()), "cap_ml_per_kg_h": round(cap, 1),
+                         "pct_above_cap": round(100 * float(above.sum() / m.sum()), 3), "p99": round(float(perkg[m].quantile(.99)), 1),
+                         "p99_99": round(float(perkg[m].quantile(.9999)), 1), "max": round(float(perkg[m].max()), 1),
+                         "rows_without_weight": int(((df["concept"] == c) & wt.isna()).sum())})
+        for (c, src), g in df.groupby(["concept", "source"]):
+            rows.append({"site": site, "concept": c, "source": src, "stays": int(g["stay_key"].nunique()), "rows": len(g),
+                         "rows_gap": int(g["flag"].str.contains("gap").sum()), "rows_outlier": int(g["flag"].str.contains("outlier").sum()),
+                         "hour_median": float(g["hour"].median()), **{k: rep[k] for k in ("rows_read", "rows_in_cohort", "rows_bad_time")}})
+        df["hour"] = df["hour"].astype("float32")
+        df["value"] = df["value"].astype("float32")
+        df.insert(0, "site", site)
+        df.to_parquet(out_dir / f"{site}_fluids.parquet", index=False)
+    return pd.DataFrame(rows), pd.DataFrame(caps)
