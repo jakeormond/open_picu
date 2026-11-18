@@ -24,7 +24,7 @@ import smh_mappings as SM
 
 SITES = ("RBH", "SMH", "GOSH")
 STAY = {"RBH": "stay_key", "GOSH": "stay_id"}      # SMH: encounterId
-MISSING = {"", "null", "nan", "none", "na", "n/a"}
+MISSING = {"", "null", "nan", "none", "na", "n/a", ".:."}      # ".:." is the RBH placeholder for an empty I:E ratio
 GV = "res_value"                                    # GOSH value column in the per-variable files
 _L = "merged_lab_values__"
 _V = "merged_values__"
@@ -142,8 +142,70 @@ CONCEPTS = {
                       note="GOSH Net_Bal (cumulative over the stay) ends at the Epic switch; the second GOSH source is the Epic-era hourly intake, "
                            "from which balance is derived as intake minus output. SMH fluidBalance is the 24 h balance; RBH hourly: not the same quantity"),
 }
-# Not in the map yet: GOSH vent mode flowsheet (the DisplayName column is empty; find the label column), and all drugs
-# (RBH Drug; SMH ids; GOSH shortLabel or drug_name).
+
+# ---- drugs: one presence concept per drug, "any record of the drug in the stay" (checked by name, 2026-11-18) ----
+# Label specs: a plain label matches exactly; a label starting with "~" is a case-insensitive regular expression
+# (so "^morphine" merges "Morphine Sulphate", "MORPHINE SULFATE" and "MORPHINE SULPHATE IV"; GOSH medsG names carry the
+# strength and form, so they are matched on the drug stem).
+# What a record means differs by source: RBH sedation/infusion and SMH infusions and GOSH CI/intrv_details are infusion
+# rates; RBH meds, SMH medications and GOSH filtered_ALL_drugs are intermittent or oral doses; GOSH medsG (Epic era
+# only, 2019-04 to 2023-04) holds administrations with no rate. The value column is the dose (RBH Dose, GOSH valueNumber)
+# or, for medsG, the drug name itself (presence only); SMH is presence only.
+_GD = "merged_drugs__"
+_CI, _ALL, _INTRV, _MEDS = (_GD + "filtered_CI_drugs_merged", _GD + "filtered_ALL_drugs_merged",
+                            _GD + "intrv_details", _GD + "medsG_medication_admins")
+
+
+def _drug(stem, rbh=(), smh=(), ci=False, all_drugs=None, intrv=False, meds=True, note=""):
+    """Drug concept. stem: regular expression for the drug name. rbh/smh: tables to search. ci, intrv, meds: GOSH tables
+    (meds = Epic-era medsG). all_drugs: True to match the stem in GOSH filtered_ALL_drugs, or a list of exact labels."""
+    lab = ["~" + stem]
+    g = []
+    if ci:
+        g.append((_CI, "valueNumber", "shortLabel", lab))
+    if intrv:
+        g.append((_INTRV, "valueNumber", "shortLabel", lab))
+    if all_drugs:
+        g.append((_ALL, "valueNumber", "shortLabel", lab if all_drugs is True else list(all_drugs)))
+    if meds:
+        g.append((_MEDS, "drug_name", "drug_name", lab))
+    return _c("drugs", [(t, "Dose", "Drug", lab) for t in rbh], [(t, "Drug_terse", lab) for t in smh], g, note)
+
+
+_RS = ("sedation", "sedation_old")        # RBH: the two sedation files overlap in time; presence is the union
+_NOTE_EPIC = "GOSH: infusion rate before 2019-04 (CI), administration record only after (medsG, no rate): check coverage by year"
+CONCEPTS.update({
+    # sedation, analgesia, neuromuscular blockade
+    "drug_midazolam": _drug("^midazolam", _RS, ("infusions",), ci=True, note=_NOTE_EPIC),
+    "drug_morphine": _drug("^morphine", _RS, ("infusions",), ci=True, note="spellings merged (sulphate, sulfate, IV). " + _NOTE_EPIC),
+    "drug_fentanyl": _drug("^fentanyl", _RS, ("infusions",), ci=True, note=_NOTE_EPIC),
+    "drug_clonidine": _drug("^clonidine", _RS, ("infusions",), ci=True, note=_NOTE_EPIC),
+    "drug_vecuronium": _drug("^vecuronium", _RS, ("infusions",), ci=True, note=_NOTE_EPIC),
+    "drug_ketamine": _drug("^ketamine", _RS, ("infusions",), ci=True, note=_NOTE_EPIC),
+    "drug_propofol": _drug("^propofol", _RS, ("infusions",), ci=True, note=_NOTE_EPIC),
+    "drug_dexmedetomidine": _drug("^dexmedetomidine", _RS, ("infusions",), ci=True, note="practice changed from 2015. " + _NOTE_EPIC),
+    "drug_atracurium": _drug("^atracurium", _RS, ("infusions",), note="not in GOSH CI; SMH very few stays"),
+    "drug_rocuronium": _drug("^rocuronium", (), ("infusions",), ci=True, note="not at RBH. " + _NOTE_EPIC),
+    "drug_remifentanil": _drug("^remifentanil", (), ("infusions",), note="not at RBH; GOSH only in Epic-era medsG"),
+    # vasoactive
+    "drug_noradrenaline": _drug("^noradrenaline", ("infusion",), ("infusions",), ci=True, intrv=True, note=_NOTE_EPIC),
+    "drug_adrenaline": _drug("^adrenaline", ("infusion",), ("infusions",), ci=True, intrv=True, note=_NOTE_EPIC),
+    "drug_dopamine": _drug("^dopamine", ("infusion",), ("infusions",), ci=True, intrv=True, note=_NOTE_EPIC),
+    "drug_milrinone": _drug("^milrinone", ("infusion",), ("infusions",), ci=True, intrv=True, note=_NOTE_EPIC),
+    "drug_vasopressin": _drug("^vasopressin", ("infusion",), ("infusions",), ci=True, intrv=True, note=_NOTE_EPIC),
+    # diuretics, steroids, chloral hydrate (intermittent or oral at all three sites; furosemide also as an infusion)
+    "drug_furosemide": _drug("^furosemide", ("meds", "infusion"), ("medications", "infusions"), ci=True, all_drugs=True,
+                             note="bolus, oral and infusion records together"),
+    "drug_spironolactone": _drug("^spironolactone", ("meds",), ("medications",), all_drugs=True),
+    "drug_dexamethasone": _drug("^dexamethasone", ("meds",), ("medications",), all_drugs=True),
+    "drug_hydrocortisone": _drug("^hydrocortisone", ("meds",), ("medications",), all_drugs=["HYDROCORTISONE"],
+                                 note="GOSH filtered_ALL_drugs: systemic only (topical and Daktacort excluded)"),
+    "drug_methylprednisolone": _drug("^methylprednisolone", ("meds",), ("medications",), all_drugs=True, note="two SMH names merged"),
+    "drug_prednisolone": _drug("^prednisolone", (), ("medications",), all_drugs=True, note="not at RBH"),
+    "drug_chlorothiazide": _drug("^chlorothiazide", ("meds",), ("medications",), note="GOSH only in Epic-era medsG; SMH very few stays"),
+    "drug_chloral_hydrate": _drug("chloral hydrate", (), ("medications",), all_drugs=True, note="not at RBH"),
+})
+# Not in the map yet: antibiotics (GOSH only: 16 names in its antibiotics table; none supplied at RBH or SMH).
 
 
 # (net_balance is not listed: the Net_Bal file ends at the switch, but Epic-era balance can be derived from caboodle intake and output.)
@@ -155,6 +217,19 @@ GOSH_PRE_EPIC_ONLY = [
     "bg_chloride", "bg_calcium", "bg_hb", "bg_hct", "bg_methb", "bg_o2_sat", "ett_size", "ie_ratio",
     "tidal_volume", "vent_mode",
 ]
+
+# GOSH drug concepts by what happens at the CareVue to Epic switch (percent of GOSH stays by year, 2026-11-18). Before it the
+# drug tables are infusion rates (CI, intrv_details) and intermittent doses (filtered_ALL_drugs); after it only medsG
+# (administrations, no rate), which also records boluses. So "any record of the drug" means something different in the two eras
+# for the sedatives and analgesics.
+GOSH_DRUG_ERA = {
+    "consistent": ["drug_furosemide", "drug_spironolactone", "drug_dexamethasone", "drug_hydrocortisone", "drug_methylprednisolone",
+                   "drug_prednisolone", "drug_chloral_hydrate", "drug_noradrenaline", "drug_adrenaline", "drug_milrinone"],
+    "step_up_at_switch": ["drug_fentanyl", "drug_ketamine", "drug_propofol", "drug_rocuronium", "drug_atracurium",
+                          "drug_remifentanil", "drug_clonidine", "drug_chlorothiazide"],
+    "falls_at_switch": ["drug_midazolam", "drug_vecuronium", "drug_morphine", "drug_vasopressin"],
+    "practice_trend": ["drug_dexmedetomidine", "drug_dopamine"],
+}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -205,14 +280,34 @@ def list_values(assembled_dir, site, table, column, min_stays=10, top=60, where=
     return shown
 
 
+def _label_mask(s, labels):
+    """Rows whose label matches: a plain label exactly, a label starting with "~" as a case-insensitive regular expression."""
+    s = s.astype("string").str.strip()
+    m = pd.Series(False, index=s.index)
+    for lab in labels:
+        m |= s.str.contains(lab[1:], case=False, regex=True, na=False) if lab.startswith("~") else (s == lab).fillna(False)
+    return m
+
+
+def _src_label(site, src):
+    """Short text naming a source in the detail table."""
+    if site == "SMH":
+        return f"{src[0]}.{src[1]}" + (f"[{','.join(src[2])}]" if len(src) == 3 else "")
+    return ".".join(str(x) for x in src[:2]) + (f"[{','.join(src[3])}]" if len(src) > 2 else "")
+
+
 def _read(assembled_dir, site, src):
-    """Rows (stay, value) for one source. For SMH value is None for the io table (presence only)."""
+    """Rows (stay, value) for one source. For SMH value is None for the io table and for name-matched drug sources (presence only).
+    Sources with a label column keep only the rows whose label matches (see _label_mask)."""
     base = Path(assembled_dir) / site
     if site == "RBH":
-        table, col = src
+        table, col = src[0], src[1]
         p = base / f"ai_picu_{table}.parquet"
-        df = pd.read_parquet(p, columns=SM._cols(p, (STAY["RBH"], col)))
-        df.columns = ["stay", "value"]
+        want = (STAY["RBH"], col) + ((src[2],) if len(src) > 2 else ())
+        df = pd.read_parquet(p, columns=SM._cols(p, want))
+        df.columns = ["stay", "value"] + (["label"] if len(src) > 2 else [])
+        if len(src) > 2:
+            df = df[_label_mask(df["label"], src[3])][["stay", "value"]]
         return df
     if site == "GOSH":
         file, col = src[0], src[1]
@@ -221,9 +316,14 @@ def _read(assembled_dir, site, src):
         df = pd.read_parquet(p, columns=SM._cols(p, want))
         df.columns = ["stay", "value"] + (["label"] if len(src) > 2 else [])
         if len(src) > 2:
-            df = df[df["label"].isin(src[3])][["stay", "value"]]
+            df = df[_label_mask(df["label"], src[3])][["stay", "value"]]
         return df
-    table, concept = src                                   # SMH
+    if len(src) == 3:                                      # SMH, by drug name: (table, name column, [labels])
+        p = SM._path(base, src[0])
+        df = pd.read_parquet(p, columns=SM._cols(p, ("encounterId", src[1])))
+        df.columns = ["stay", "label"]
+        return df[_label_mask(df["label"], src[2])][["stay"]].assign(value=PRESENT)
+    table, concept = src                                   # SMH, by interventionId / attributeId
     p = SM._path(base, table)
     keys = SM.KEY.get(table, ("interventionId",))
     vcol = None if table == "io" else "terseForm"
@@ -236,17 +336,17 @@ def _read(assembled_dir, site, src):
     out = df[ids.isin(SM.MAPPINGS[table][concept])]
     out = out[["stay"] + (["value"] if vcol else [])]
     if not vcol:
-        out = out.assign(value=None)
+        out = out.assign(value=PRESENT)
     return out
 
 
+PRESENT = "__present__"      # value of sources that only record that something exists (SMH io, drug names)
+
+
 def _stats(df):
-    if df["value"].notna().any():
-        pres = _present(df["value"])
-        d = df[pres]
-        num = pd.to_numeric(d["value"], errors="coerce")
-    else:
-        d, num = df, pd.Series(dtype=float)
+    """Rows with a real value only: a column that is entirely empty counts no stays (earlier versions counted every stay)."""
+    d = df[_present(df["value"])]
+    num = pd.to_numeric(d["value"], errors="coerce") if not (d["value"] == PRESENT).all() else pd.Series(dtype=float)
     q = num.quantile([.05, .5, .95]) if num.notna().any() else pd.Series([float("nan")] * 3)
     return {"rows": len(d), "stays": set(d["stay"].astype(str)),
             "numeric_pct": round(100 * num.notna().mean(), 1) if len(num) else float("nan"),
@@ -273,7 +373,7 @@ def build(assembled_dir, static=None, n_stays=None, concepts=None, sites=SITES, 
         for site in sites:
             allstays = set()
             for src in c[site]:
-                label = ".".join(str(x) for x in src[:2]) + (f"[{','.join(src[3])}]" if len(src) > 2 else "")
+                label = _src_label(site, src)
                 try:
                     st = _stats(_read(assembled_dir, site, src))
                 except (FileNotFoundError, KeyError) as e:
@@ -295,6 +395,8 @@ def build(assembled_dir, static=None, n_stays=None, concepts=None, sites=SITES, 
             print(f"WARNING {site}: only {100 * hit / tot:.0f}% of the stays read match static stay_key; check the key format")
     detail, summary = pd.DataFrame(det), pd.DataFrame(summ)
     summary["gosh_pre_epic_only"] = summary["concept"].isin(GOSH_PRE_EPIC_ONLY)
+    era = {n: k for k, v in GOSH_DRUG_ERA.items() for n in v}
+    summary["gosh_drug_era"] = summary["concept"].map(era)
     for col in [c for c in summary.columns if c.endswith("_stays")]:
         summary[col] = summary[col].astype("Int64")
     if save_to:
@@ -304,14 +406,16 @@ def build(assembled_dir, static=None, n_stays=None, concepts=None, sites=SITES, 
     return detail, summary
 
 
-def survivors(summary, min_pct=50, sites=SITES, exclude_era=False):
+def survivors(summary, min_pct=50, sites=SITES, exclude_era=False, exclude_groups=("drugs",)):
     """Concepts present at all the given sites with at least min_pct of that site's stays.
-    exclude_era=True also drops the concepts whose GOSH source ends at the Epic switch (GOSH_PRE_EPIC_ONLY)."""
-    ok = pd.Series(True, index=summary.index)
+    exclude_era=True also drops the concepts whose GOSH source ends at the Epic switch (GOSH_PRE_EPIC_ONLY).
+    Drugs are excluded by default: their coverage is the share of stays that received the drug, not how well it is recorded,
+    so a coverage threshold does not apply to them."""
+    ok = ~summary["group"].isin(exclude_groups)
     for s in sites:
         ok &= summary[f"{s}_pct"].fillna(0) >= min_pct
     if exclude_era:
-        ok &= ~summary["gosh_pre_epic_only"]
+        ok &= ~summary["concept"].isin(GOSH_PRE_EPIC_ONLY)
     return summary[ok].reset_index(drop=True)
 
 
@@ -355,3 +459,89 @@ def era_columns(path, time_col="hour_timestamp", split="2019-04-20"):
                         "post_pct": 100 * df.loc[post, cols].notna().mean()}).round(1)
     res["rows_pre"], res["rows_post"] = int(pre.sum()), int(post.sum())
     return res
+
+
+def availability(assembled_dir, static, concepts=None, sites=SITES, save_to=None):
+    """Stay x concept table of booleans: does the stay have at least one value of the concept?
+    <NA> means the site has no source for the concept at all (not collected), False means collected but absent for this stay.
+    Row-level (one row per stay): keep it in derived/ only. It lets users choose a feature set and the stays that have it."""
+    names = [n for n in CONCEPTS if (n in concepts if concepts else CONCEPTS[n]["group"] != "drugs")]   # default: not the drugs
+    parts = []
+    for site in sites:
+        keys = static.loc[static["site"] == site, "stay_key"].astype(str).tolist()
+        df = pd.DataFrame(index=pd.MultiIndex.from_product([[site], keys], names=["site", "stay_key"]))
+        for n in names:
+            c = CONCEPTS[n]
+            if not c[site]:
+                df[n] = pd.array([pd.NA] * len(keys), dtype="boolean")
+                continue
+            have = set()
+            for src in c[site]:
+                try:
+                    have |= _stats(_read(assembled_dir, site, src)).pop("stays")
+                except (FileNotFoundError, KeyError):
+                    pass
+            df[n] = pd.array([k in have for k in keys], dtype="boolean")
+        parts.append(df)
+    out = pd.concat(parts)
+    if save_to:
+        Path(save_to).parent.mkdir(parents=True, exist_ok=True)
+        out.to_parquet(save_to)
+    return out
+
+
+def pattern_uniqueness(avail, by_group=False, min_count=10):
+    """How identifying is the availability pattern itself? Counts distinct patterns (site included) and the stays whose
+    pattern is shared by fewer than `min_count` stays. by_group=True collapses the concepts to their groups first
+    (vitals, vent, blood gas, lab, fluids). Counts only."""
+    a = avail.copy()
+    if by_group:
+        groups = {}
+        for n in a.columns:
+            groups.setdefault(CONCEPTS[n]["group"], []).append(n)
+        a = pd.DataFrame({g: a[cols].fillna(False).astype(bool).any(axis=1) for g, cols in groups.items()}, index=a.index)
+    code = a.astype("string").fillna("-").replace({"True": "1", "False": "0"})
+    pat = code.apply(lambda r: "".join(r), axis=1)
+    site = pd.Series(a.index.get_level_values("site"), index=a.index)
+    key = site.astype(str) + ":" + pat
+    size = key.map(key.value_counts())
+    res = {"stays": len(a), "distinct_patterns": int(key.nunique()), f"patterns_with_fewer_than_{min_count}_stays": int((key.value_counts() < min_count).sum()),
+           f"stays_in_those_patterns": int((size < min_count).sum()), "share_of_stays_pct": round(100 * float((size < min_count).mean()), 1)}
+    return res
+
+
+def rare_share(avail, static, by=("site",), min_count=10):
+    """Share of stays whose availability pattern (site included) is shared by fewer than `min_count` stays,
+    broken down by columns of the static table (for example site, year, diagnosis_group). Counts only."""
+    a = avail.copy()
+    code = a.astype("string").fillna("-").replace({"True": "1", "False": "0"})
+    pat = code.apply(lambda r: "".join(r), axis=1)
+    key = pd.Series(a.index.get_level_values("site"), index=a.index).astype(str) + ":" + pat
+    rare = (key.map(key.value_counts()) < min_count).rename("rare").reset_index()
+    rare["stay_key"] = rare["stay_key"].astype(str)
+    st = static.assign(stay_key=static["stay_key"].astype(str))
+    m = st.merge(rare, on=["site", "stay_key"], how="inner")
+    by = list(by)
+    g = m.groupby(by)["rare"].agg(stays="size", rare_stays="sum")
+    g["rare_pct"] = (100 * g["rare_stays"] / g["stays"]).round(1)
+    return g
+
+
+def names_by_year(assembled_dir, site, table, column, time_col, names=None, min_stays=10, top=20):
+    """Number of stays per year in which each label of `column` appears, from the row times in `time_col`.
+    Use it to see where a drug source starts or stops (for example GOSH before and after the Epic switch).
+    names=None uses the `top` labels with most stays. Counts only; years with fewer than `min_stays` stays are blanked."""
+    base = Path(assembled_dir) / site
+    p = base / f"{table}.parquet" if site != "SMH" else SM._path(base, table)
+    stay = STAY.get(site, "encounterId")
+    df = pd.read_parquet(p, columns=SM._cols(p, (stay, column, time_col)))
+    df.columns = ["stay", "label", "t"]
+    df = df[_present(df["label"])]
+    if names is None:
+        names = df.groupby("label")["stay"].nunique().sort_values(ascending=False).head(top).index
+    df = df[df["label"].isin(list(names))]
+    df["year"] = pd.to_datetime(df["t"], errors="coerce", format="mixed").dt.year
+    out = df.groupby(["year", "label"])["stay"].nunique().unstack("label").fillna(0).astype(int)
+    out = out.where(out >= min_stays)
+    out["unparsed_time_rows"] = int(df["year"].isna().sum())
+    return out
