@@ -113,9 +113,10 @@ def ethnicity_group(label):
     return "Other"
 
 
-def coarsen(static, k=10, ethnicity="group", weight=True, n_groups=10, seed=0, merge_dx=False, age_edges=AGE_EDGES, weight_edges=WEIGHT_EDGES, los_edges=LOS_EDGES):
+def coarsen(static, k=10, ethnicity="group", weight=True, los=False, n_groups=10, seed=0, merge_dx=False, age_edges=AGE_EDGES, weight_edges=WEIGHT_EDGES, los_edges=LOS_EDGES):
     """Copy of the static table with the candidate Tier 2 coarsening, for the uniqueness check. Columns kept: site, stay_key, age_band,
-    sex, ethnicity, diagnosis_group, died, split_group, and weight_band and los_band. Dropped: patient_id, year, t0, pim, pim_version, exact age,
+    sex, ethnicity, diagnosis_group, died, split_group, weight_band (weight=True) and los_band (los=True; off by default: length of stay is
+    not a Tier 2 static field). Dropped: patient_id, year, t0, pim, pim_version, exact age,
     weight and length of stay.
     - ethnicity='group': six broad groups (White, Asian, Black, Mixed, Other, Not recorded); 'detail': the recorded label, with labels seen in
       fewer than k stays at a site merged into '<group> (merged)'.
@@ -124,7 +125,9 @@ def coarsen(static, k=10, ethnicity="group", weight=True, n_groups=10, seed=0, m
     - sex: values other than Male and Female, or seen in fewer than k stays at the site, become missing.
     - split_group: each patient is assigned at random (per site, fixed seed) to one of n_groups groups; use it for patient-level splits."""
     s = add_bands(static, age_edges, weight_edges, los_edges)
-    out = pd.DataFrame({"site": s["site"], "stay_key": s["stay_key"], "age_band": s["age_band"], "los_band": s["los_band"]})
+    out = pd.DataFrame({"site": s["site"], "stay_key": s["stay_key"], "age_band": s["age_band"]})
+    if los:
+        out["los_band"] = s["los_band"]
     if weight:
         out["weight_band"] = s["weight_band"]
     sex = s["sex"].astype("string")
@@ -157,8 +160,8 @@ T2_COMBOS = {
     "t2 +diagnosis": ["age_band", "sex", "ethnicity", "diagnosis_group"],
     "t2 +outcome": ["age_band", "sex", "ethnicity", "diagnosis_group", "died"],
     "t2 +weight": ["age_band", "sex", "ethnicity", "diagnosis_group", "died", "weight_band"],
-    "t2 +los": ["age_band", "sex", "ethnicity", "diagnosis_group", "died", "weight_band", "los_band"],
 }
+T2_COMBOS_WITH_LOS = {**T2_COMBOS, "t2 +LOS (not released)": ["age_band", "sex", "ethnicity", "diagnosis_group", "died", "weight_band", "los_band"]}
 
 
 def split_group_sizes(coarse):
@@ -173,22 +176,23 @@ WEIGHT_COARSE = [0, 5, 10, 20, 40, np.inf]
 LOS_COARSE = [0, 24, 72, 240, np.inf]
 
 
-def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)"):
+def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)", by_site=True):
     """Local suppression: stays are all kept; for stays whose combination of `key_cols` is shared by fewer than k stays at their site, one
     field at a time (in `order`, least valuable first) is replaced by `token`, recomputing the cells after each field, until no stay is in a
-    cell below k or the fields are used up. Returns (frame, report): per field the number of values suppressed, and at the end the stays
+    cell below k or the fields are used up. by_site=True counts cells within each site (the site is a visible column); by_site=False counts
+    them across all sites (the site column is not released). Returns (frame, report): per field the number of values suppressed, and at the end the stays
     still in cells below k. Counts only. A field in `order` that is not in `key_cols` is still suppressed when it is listed."""
     out = coarse.copy()
     rows = []
     for f in order:
         cols = [c for c in key_cols if c in out.columns]
-        size = out.groupby(["site"] + [out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
+        size = out.groupby(([out["site"]] if by_site else []) + [out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
         small = size < k
         if f in out.columns and small.any():
             out[f] = out[f].astype("string").mask(small, token)
         rows.append({"field": f, "values_suppressed": int(small.sum()) if f in out.columns else 0})
     cols = [c for c in key_cols if c in out.columns]
-    size = out.groupby(["site"] + [out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
+    size = out.groupby(([out["site"]] if by_site else []) + [out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
     rows.append({"field": "(stays still below k)", "values_suppressed": int((size < k).sum())})
     return out, pd.DataFrame(rows)
 
@@ -242,9 +246,10 @@ def merge_table(static, col="diagnosis_group", k=10):
     return out.assign(_n=t.sum(axis=1)).sort_values("_n", ascending=False).drop(columns="_n")
 
 
-def plot_buildup(variants, k=10, order=None, path=None):
+def plot_buildup(variants, k=10, order=None, path=None, absolute=False):
     """Share of stays in cells smaller than k as fields are added one by one: one panel per site and pooled, one line per variant (a dict of
-    name -> `uniqueness` frame). Shows which field makes the data identifiable and how much coarsening helps."""
+    name -> `uniqueness` frame). Shows which field makes the data identifiable and how much coarsening helps. absolute=True plots the number of
+    stays in such cells instead of the share (log scale)."""
     import matplotlib.pyplot as plt
     order = order or list(next(iter(variants.values()))["combination"].unique())
     sites = ["GOSH", "RBH", "SMH", "pooled"]
@@ -254,31 +259,40 @@ def plot_buildup(variants, k=10, order=None, path=None):
         _ax(ax)
         for (name, df), (ls, mk) in zip(variants.items(), styles):
             d = df[df["site"] == site].set_index("combination").reindex(order)
-            ax.plot(range(len(order)), d["share_below_k"] * 100, ls, marker=mk, ms=7, lw=2, color=SITE_COLOUR[site], mfc=SURFACE, mew=2, label=name)
+            y = d[f"stays_in_cells_below_{k}"] if absolute else d["share_below_k"] * 100
+            ax.plot(range(len(order)), y, ls, marker=mk, ms=7, lw=2, color=SITE_COLOUR[site], mfc=SURFACE, mew=2, label=name)
         ax.set_title(site, color=INK, fontsize=11, loc="left")
         ax.set_xticks(range(len(order)))
         ax.set_xticklabels([o.replace("t2 ", "") for o in order], rotation=40, ha="right")
-    axes[0].set_ylabel(f"stays in cells smaller than {k} (%)", color=INK2)
+    if absolute:
+        axes[0].set_yscale("log")
+    axes[0].set_ylabel(f"stays in cells smaller than {k}" + (" (number, log scale)" if absolute else " (%)"), color=INK2)
     axes[0].legend(frameon=False, fontsize=8, labelcolor=INK2)
     fig.suptitle("Identifiability as static fields are added", color=INK, x=0.01, ha="left", fontsize=12)
     return _save(fig, path)
 
 
-def plot_suppression(rep, n_stays, path=None):
-    """Share of stays that lose each field under local suppression (from `suppress_to_k`'s report); the last row is stays still below k."""
+def plot_suppression(rep, n_stays, path=None, title=None):
+    """How many stays are still in a cell smaller than k at each stage of local suppression: before any suppression, then after each field in
+    turn has been blanked (from `suppress_to_k`'s report). The stays that lose a field are the ones counted at the stage before it, so the
+    first bar is also the number of stays that lose the first field."""
     import matplotlib.pyplot as plt
-    r = rep.copy()
-    r["share"] = r["values_suppressed"] / n_stays * 100
-    fig, ax = plt.subplots(figsize=(7, 3.4))
+    fields = list(rep["field"].iloc[:-1])
+    vals = list(rep["values_suppressed"])
+    labels = ["Before any suppression"] + [f"After blanking {f.replace('_', ' ')}" for f in fields]
+    share = [v / n_stays * 100 for v in vals]
+    fig, ax = plt.subplots(figsize=(8, 3.6))
     _ax(ax)
     ax.grid(axis="x", color=GRID, linewidth=0.8)
     ax.grid(axis="y", visible=False)
-    ax.barh(r["field"], r["share"], color=CAT[0], height=0.55)
-    for y, v in enumerate(r["share"]):
-        ax.text(v + 0.5, y, f"{v:.1f}%", va="center", color=INK2, fontsize=9)
+    ax.barh(labels, share, color=CAT[0], height=0.55)
+    for y, (v, sh) in enumerate(zip(vals, share)):
+        ax.text(sh + 0.6, y, f"{v:,} stays ({sh:.1f}%)", va="center", color=INK2, fontsize=9)
     ax.invert_yaxis()
-    ax.set_xlabel("stays affected (%)", color=INK2)
-    ax.set_title("What local suppression costs", color=INK, loc="left", fontsize=11)
+    ax.set_xlim(0, max(share) * 1.35)
+    ax.set_xlabel("stays in a cell smaller than 10 (%)", color=INK2)
+    ax.set_title(title or "Local suppression: rare stays remaining after each field is blanked", color=INK, loc="left", fontsize=11)
+    fig.text(0.01, 0.01, "Each field is blanked for the stays still in a small cell before that step.", color=INK2, fontsize=8)
     return _save(fig, path)
 
 
@@ -321,3 +335,103 @@ def plot_composition(static, col="ethnicity", mapper=ethnicity_group, path=None)
     ax.legend(frameon=False, ncol=len(cols), fontsize=8, labelcolor=INK2, loc="upper center", bbox_to_anchor=(0.5, -0.3))
     ax.set_title(f"{col.replace('_', ' ').capitalize()} groups by site", color=INK, loc="left", fontsize=11)
     return _save(fig, path)
+
+
+def plot_pooling(uniq, k=10, path=None):
+    """Number of stays in cells smaller than k for each combination: the three sites counted separately (cells inside each site, the situation
+    when the site is a released column) against all stays pooled (cells across sites, when the site is not visible). `uniq` is a `uniqueness`
+    frame with the site rows and the pooled rows."""
+    import matplotlib.pyplot as plt
+    col = f"stays_in_cells_below_{k}"
+    order = list(uniq["combination"].unique())
+    sep = uniq[uniq["site"] != "pooled"].groupby("combination")[col].sum().reindex(order)
+    pool = uniq[uniq["site"] == "pooled"].set_index("combination")[col].reindex(order)
+    fig, ax = plt.subplots(figsize=(8, 3.6))
+    _ax(ax)
+    x = np.arange(len(order))
+    ax.bar(x - 0.2, sep.to_numpy(), width=0.38, color=CAT[0], label="cells within each site")
+    ax.bar(x + 0.2, pool.to_numpy(), width=0.38, color=CAT[1], label="cells across all sites")
+    ax.set_yscale("symlog", linthresh=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels([o.replace("t2 ", "") for o in order], rotation=30, ha="right")
+    ax.set_ylabel(f"stays in cells smaller than {k}", color=INK2)
+    ax.legend(frameon=False, labelcolor=INK2, fontsize=9)
+    ax.set_title("Pooling sites shrinks the number of rare stays", color=INK, loc="left", fontsize=11)
+    return _save(fig, path)
+
+
+def plot_scope(uniq, combination="all", k=10, path=None):
+    """Stays in cells smaller than k for one combination, counted two ways: within each site (stacked by site, the total over the three sites) and
+    across all sites pooled. Use it on the frame from `uniqueness` after suppression to show why pooling matters when the site is not visible."""
+    import matplotlib.pyplot as plt
+    col = f"stays_in_cells_below_{k}"
+    u = uniq[uniq["combination"] == combination].set_index("site")[col]
+    sites = [s for s in ("GOSH", "RBH", "SMH") if s in u.index]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    _ax(ax)
+    bottom = 0
+    for site in sites:
+        v = int(u[site])
+        ax.bar(0, v, bottom=bottom, color=SITE_COLOUR[site], width=0.55, label=site, edgecolor=SURFACE, linewidth=2)
+        ax.text(0, bottom + v / 2, f"{site} {v}", ha="center", va="center", color="#ffffff", fontsize=9)
+        bottom += v
+    ax.text(0, bottom + max(bottom, 1) * 0.02, str(int(bottom)), ha="center", va="bottom", color=INK, fontsize=10)
+    pooled = int(u["pooled"])
+    ax.bar(1, pooled, color=INK, width=0.55)
+    ax.text(1, pooled + max(bottom, 1) * 0.02, str(pooled), ha="center", va="bottom", color=INK, fontsize=10)
+    ax.set_ylim(0, max(bottom, pooled, 1) * 1.15)
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(["cells within each site\n(site is visible)", "cells across all sites\n(site is not visible)"])
+    ax.set_ylabel(f"stays in cells smaller than {k}", color=INK2)
+    ax.set_title("Rare stays after suppression", color=INK, loc="left", fontsize=11)
+    return _save(fig, path)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------
+# Site inference. Decision (Jake, 2026-11-19): the release is pooled and the site is not a column; anonymisation also has to make the site hard
+# to infer, for example by dropping features that exist at one site only. These checks measure how well the site can still be guessed.
+# ---------------------------------------------------------------------------------------------------------------------------------
+def concept_coverage(avail):
+    """For each concept: the sites that collect it at all (not <NA> in the availability table). Concepts collected at only some sites tell
+    the user which site a stay is from. Names and site lists only."""
+    sites = sorted(set(avail.index.get_level_values("site")))
+    rows = []
+    for c in avail.columns:
+        have = [s for s in sites if avail.xs(s, level="site")[c].notna().any()]
+        rows.append({"concept": c, "sites": ", ".join(have), "n_sites": len(have)})
+    return pd.DataFrame(rows).sort_values(["n_sites", "concept"])
+
+
+def pattern_site_share(avail, min_count=10):
+    """Availability patterns (the set of concepts a stay has, site left out): the share of stays whose pattern occurs at one site only, and the
+    share whose pattern occurs at one site only with fewer than min_count stays. Counts only."""
+    a = avail.copy()
+    pat = a.astype("string").fillna("-").replace({"True": "1", "False": "0"}).apply(lambda r: "".join(r), axis=1)
+    site = pd.Series(a.index.get_level_values("site"), index=a.index)
+    nsites = pat.groupby(pat).transform(lambda s: site[s.index].nunique())
+    return {"stays": len(a), "share_pattern_at_one_site_only": round(float((nsites == 1).mean()), 4)}
+
+
+def site_inference(X, site, cv=5, drop_one=True, seed=0, groups=None):
+    """How well the site can be guessed from the columns of X (one row per stay; categorical and boolean columns are one-hot encoded, missing
+    values count as a category). Cross-validated accuracy of a gradient-boosting classifier against the baseline of always guessing the largest
+    site, and per-site recall. drop_one=True also reports the accuracy with each column left out, to show which columns give the site away.
+    groups: one label per row (for example site and patient) so that all stays of a patient fall in the same fold; without it a patient's
+    stays can be in both training and test folds, which makes the site look easier to guess than it is. Needs scikit-learn. Counts only;
+    no values from X are shown."""
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.model_selection import cross_val_predict, StratifiedKFold, StratifiedGroupKFold
+    y = pd.Series(np.asarray(site)).astype(str)
+
+    def acc(cols):
+        Z = pd.get_dummies(X[cols].astype("string").fillna("(missing)"), dtype=float)
+        folds = StratifiedGroupKFold(cv, shuffle=True, random_state=seed) if groups is not None else StratifiedKFold(cv, shuffle=True, random_state=seed)
+        p = cross_val_predict(HistGradientBoostingClassifier(random_state=seed, max_iter=100), Z.to_numpy(), y.to_numpy(),
+                              cv=folds, groups=None if groups is None else np.asarray(groups))
+        return float((p == y.to_numpy()).mean()), pd.Series(p == y.to_numpy()).groupby(y.to_numpy()).mean()
+
+    a, per = acc(list(X.columns))
+    out = {"accuracy": round(a, 4), "baseline": round(float(y.value_counts(normalize=True).iloc[0]), 4), "recall_by_site": per.round(3)}
+    if drop_one:
+        out["accuracy_without"] = pd.Series({c: round(acc([k for k in X.columns if k != c])[0], 4) for c in X.columns}).sort_values()
+    return out
