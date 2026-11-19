@@ -41,12 +41,20 @@ import static as ST
 TZ = "Europe/London"
 MIN_HOURS = 6.0
 
-TEXT = {"vent_mode", "cardiac_rhythm", "airway_device", "pupil_reaction", "avpu", "bg_sample_type", "crt"}
+TEXT = {"vent_mode", "cardiac_rhythm", "airway_device", "pupil_reaction", "avpu", "bg_sample_type", "crt", "ett_route", "ett_cuff"}
+# SMH ETT_paed holds size (3.5), depth ('12cm'), route (Oral, Nasal) and cuff (Cuffed, Un-cuffed) in one source: each kind goes to its own concept.
+_ETT_OTHER = r"cm\s*$|^(oral|nasal|cuffed|un-cuffed)$"
+VALUE_KEEP = {("SMH", "ett_depth"): r"^\d+(\.\d+)?\s*cm$", ("SMH", "ett_route"): r"^(oral|nasal)$", ("SMH", "ett_cuff"): r"^(cuffed|un-cuffed)$"}
+VALUE_DROP = {("SMH", "ett_size"): _ETT_OTHER}
 ZERO_MISSING = {("RBH", "pip"), ("RBH", "mean_airway_pressure"), ("RBH", "rr_set"), ("GOSH", "resp_rate_monitor"), ("GOSH", "bilirubin")}
 DIA_OF = {"nibp_dia": "nibp_sys", "abp_dia": "abp_sys"}          # GOSH: diastolic copied from systolic
 HB = {"bg_hb", "haemoglobin"}
 HCT = {"bg_hct"}
 SKIP_GROUPS = {"drugs", "fluids"}
+NO_DEDUP = {"pupil_size", "pupil_reaction"}     # two eyes share one concept and the eye is not identified (SMH two attributes, GOSH one column): identical rows are kept
+# Range flags: rows outside (low, high) get the flag "range"; the value is never changed or removed. Limits are in the units of the harmonised value.
+# Agreed concepts only; add a concept here to flag it. insp_time: seconds (GOSH also holds a percentage near 33, probably HFOV); albumin g/L; cvp mmHg; hr per minute; resp_rate_total per minute.
+RANGE = {"insp_time": (0.05, 5.0), "albumin": (5.0, 60.0), "cvp": (-10.0, 40.0), "hr": (20.0, 300.0), "resp_rate_total": (1.0, 120.0)}
 
 
 # ------------------------------------------------------------------ cohort and clock
@@ -96,45 +104,64 @@ def _parse_ie(s):
 
 def _numeric(concept, site, s):
     s = _clean_text(s)
-    if concept == "tidal_volume":
+    if concept in ("tidal_volume", "ett_depth"):
         return _f64(s.str.extract(r"(-?\d+\.?\d*)")[0])
     return _f64(s)
 
 
-def _read_concept(assembled_dir, site, concept, keep, report):
+def _read_concept(assembled_dir, site, concept, keep, report, rejected=None):
     """All sources of the concept at the site, cohort stays only, with hours and the numeric or text value, before the rules.
-    Returns a long frame (stay_key, hour, value, value_text, source)."""
+    Returns a long frame (stay_key, hour, value, value_text, source, src_row, value_raw). `src_row` is the row number in the assembled
+    source table; `value_raw` is the recorded text where parsing changed it (a unit stripped from tidal volume, RBH 'a:b' I:E), else empty.
+    Rows with a time and something recorded that is not a number are appended to `rejected` (a list) with the reason non_numeric and the
+    recorded text; empty cells (nothing recorded; most rows of the wide RBH and SMH tables for any one variable) are only counted, as rows_empty."""
     parts = []
     for i, src in enumerate(C.CONCEPTS[concept][site]):
         df = C._read(assembled_dir, site, src, time=True)
         report["rows_read"] += len(df)
         df["stay"] = df["stay"].astype(str)
         df = df[df["stay"].isin(keep.index)]
+        df["src_row"] = df.index.to_numpy(dtype="int64")
         report["rows_in_cohort"] += len(df)
         if concept == "ie_ratio" and site == "SMH":
             v = _f64(_clean_text(df["value"]))
-            g = df.assign(v=v).dropna(subset=["v"]).groupby(["stay", "t"], sort=False)["v"].agg(["max", "size"]).reset_index()
-            g = g[(g["size"] > 1) | (g["max"] > 1)]
-            df = pd.DataFrame({"stay": g["stay"], "t": g["t"], "value": g["max"]})
+            g = (df.assign(v=v).dropna(subset=["v"]).groupby(["stay", "t"], sort=False)
+                 .agg(value=("v", "max"), size=("v", "size"), src_row=("src_row", "first")).reset_index())
+            g = g[(g["size"] > 1) | (g["value"] > 1)]
+            df = g[["stay", "t", "value", "src_row"]].copy()
+        if (site, concept) in VALUE_KEEP or (site, concept) in VALUE_DROP:
+            hit = _clean_text(df["value"]).str.contains(VALUE_KEEP.get((site, concept)) or VALUE_DROP[(site, concept)], case=False, regex=True, na=False).to_numpy(dtype=bool)
+            df = df[hit if (site, concept) in VALUE_KEEP else ~hit]
         df["hour"] = to_hours(df["t"], site, df["stay"].map(keep))
         report["rows_bad_time"] += int(df["hour"].isna().sum())
         df = df.dropna(subset=["hour"])
+        df["value_raw"] = pd.Series(pd.NA, index=df.index, dtype="string")
         if concept in TEXT:
             df["value_text"] = _clean_text(df["value"])
             df["value"] = np.nan
             df = df.dropna(subset=["value_text"])
-        elif concept == "ie_ratio" and site == "RBH":
-            df["value"] = _parse_ie(df["value"])
-            df["value_text"] = pd.NA
         else:
-            df["value"] = _numeric(concept, site, df["value"])
+            raw = df["value"]
+            if concept == "ie_ratio" and site == "RBH":
+                df["value"] = _parse_ie(raw)
+            else:
+                df["value"] = _numeric(concept, site, raw)
+            raw = _clean_text(raw)
+            parsed = (df["value"].notna() & _f64(raw).isna()).to_numpy(dtype=bool)       # the number was cut out of text
+            df.loc[parsed, "value_raw"] = raw[parsed]
             df["value_text"] = pd.NA
-        if concept not in TEXT:
-            bad = df["value"].isna()
-            report["rows_non_numeric"] += int(bad.sum())
+            empty = raw.isna().to_numpy(dtype=bool)                                         # nothing recorded in the cell
+            bad = df["value"].isna().to_numpy(dtype=bool)
+            report["rows_empty"] = report.get("rows_empty", 0) + int(empty.sum())
+            report["rows_non_numeric"] += int((bad & ~empty).sum())                         # something recorded that is not a number
+            bad_present = bad & ~empty
+            if rejected is not None and bad_present.any():
+                rejected.append(pd.DataFrame({"stay_key": df.loc[bad_present, "stay"], "concept": concept, "hour": df.loc[bad_present, "hour"].astype("float32"),
+                                              "value_raw": raw[bad_present], "reason": "non_numeric", "source": str(i), "src_row": df.loc[bad_present, "src_row"]}))
             df = df[~bad]
-        parts.append(df[["stay", "hour", "value", "value_text"]].assign(source=str(i)))
-    out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["stay", "hour", "value", "value_text", "source"])
+        parts.append(df[["stay", "hour", "value", "value_text", "value_raw", "src_row"]].assign(source=str(i)))
+    cols = ["stay", "hour", "value", "value_text", "value_raw", "src_row", "source"]
+    out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
     return out.rename(columns={"stay": "stay_key"})
 
 
@@ -175,11 +202,21 @@ def stay_window(assembled_dir, static, pre_hours=PRE_HOURS, trail_hours=TRAIL_HO
     return w.reset_index(drop=True)
 
 
-def harmonise_concept(assembled_dir, site, concept, keep, report=None, window=None):
-    """One concept at one site as a long frame (stay_key, concept, hour, value, value_text, flag, source), rules applied.
-    keep: Series stay_key (text) -> t0 in UTC for the cohort stays of the site. report: dict of counters (updated)."""
+def _rej(df, concept, reason, raw=None):
+    """Rows removed by a value rule, for the rejected-rows file: the recorded value as text, the reason and where it came from."""
+    return pd.DataFrame({"stay_key": df["stay_key"], "concept": concept, "hour": df["hour"].astype("float32"),
+                         "value_raw": pd.Series(raw if raw is not None else df["value"].round(6).astype(str).to_numpy(), index=df.index, dtype="string"),
+                         "reason": reason, "source": df["source"], "src_row": df["src_row"]})
+
+
+def harmonise_concept(assembled_dir, site, concept, keep, report=None, window=None, rejected=None):
+    """One concept at one site as a long frame (stay_key, concept, hour, value, value_text, value_raw, flag, source, src_row), rules applied.
+    keep: Series stay_key (text) -> t0 in UTC for the cohort stays of the site. report: dict of counters (updated).
+    rejected: a list that receives the rows removed by a value rule (non_numeric, zero_missing, diastolic_copy) with their recorded text.
+    value_raw holds the recorded value as text wherever the harmonised value differs from it (x10, x100, parsed text); src_row is the row
+    number in the assembled source table (empty for derived rows)."""
     rep = report if report is not None else {}
-    for k in ("rows_read", "rows_in_cohort", "rows_bad_time", "rows_non_numeric", "rows_outside_window", "rows_set_missing", "rows_converted", "rows_derived", "rows_dup"):
+    for k in ("rows_read", "rows_in_cohort", "rows_bad_time", "rows_non_numeric", "rows_outside_window", "rows_set_missing", "rows_converted", "rows_derived", "rows_dup", "rows_range_flag", "rows_empty"):
         rep.setdefault(k, 0)
     flag = None                                   # None: flags set row by row below
     if site == "GOSH" and concept == "bg_base_excess":
@@ -187,67 +224,91 @@ def harmonise_concept(assembled_dir, site, concept, keep, report=None, window=No
         hco3 = _paired(assembled_dir, site, "bg_hco3", keep).rename(columns={"value": "hco3"})
         m = ph.merge(hco3, on=["stay_key", "hour"])
         m = m[m["ph"].between(6.5, 7.8) & m["hco3"].between(1, 60)]
-        df = m.assign(value=C.derive_base_excess(m["ph"], m["hco3"]), value_text=pd.NA, source="0")[["stay_key", "hour", "value", "value_text", "source"]]
+        df = m.assign(value=C.derive_base_excess(m["ph"], m["hco3"]), value_text=pd.NA, value_raw=pd.NA, src_row=pd.NA, source="0")[
+            ["stay_key", "hour", "value", "value_text", "value_raw", "src_row", "source"]]
         flag = "derived"
         rep["rows_derived"] += len(df)
     else:
-        df = _read_concept(assembled_dir, site, concept, keep, rep)
+        df = _read_concept(assembled_dir, site, concept, keep, rep, rejected)
         if (site, concept) in ZERO_MISSING:
-            z = df["value"] == 0
+            z = (df["value"] == 0).to_numpy(dtype=bool)
             rep["rows_set_missing"] += int(z.sum())
+            if rejected is not None and z.any():
+                rejected.append(_rej(df[z], concept, "zero_missing", "0"))
             df = df[~z]
         if site == "GOSH" and concept in DIA_OF:
             sys_ = _paired(assembled_dir, site, DIA_OF[concept], keep).rename(columns={"value": "sys"}).drop_duplicates(["stay_key", "hour"])
             m = df.merge(sys_, on=["stay_key", "hour"], how="left")
             same = (m["value"] == m["sys"]).fillna(False).to_numpy(dtype=bool)
             rep["rows_set_missing"] += int(same.sum())
+            if rejected is not None and same.any():
+                rejected.append(_rej(df[same], concept, "diastolic_copy"))
             df = df[~same]
         df = df.assign(flag="")
         if concept in HB:
-            low = df["value"] < 30
+            low = (df["value"] < 30).to_numpy(dtype=bool)
+            df.loc[low, "value_raw"] = df.loc[low, "value"].round(6).astype(str)
             df.loc[low, "value"] *= 10
             df.loc[low, "flag"] = "x10"
             rep["rows_converted"] += int(low.sum())
         if concept in HCT:
-            frac = df["value"] <= 1.5
+            frac = (df["value"] <= 1.5).to_numpy(dtype=bool)
+            df.loc[frac, "value_raw"] = df.loc[frac, "value"].round(6).astype(str)
             df.loc[frac, "value"] *= 100
             df.loc[frac, "flag"] = "x100"
             rep["rows_converted"] += int(frac.sum())
     if flag is not None:
         df = df.assign(flag=flag)
+    if concept in RANGE:
+        lo, hi = RANGE[concept]
+        out = ((df["value"] < lo) | (df["value"] > hi)).to_numpy(dtype=bool)
+        f = df["flag"].astype("string").fillna("").to_numpy()
+        df = df.assign(flag=np.where(out, np.where(f == "", "range", pd.Series(f).astype(str) + ";range"), f))
+        rep["rows_range_flag"] += int(out.sum())
     if window is not None:
         outside = (df["hour"] < window["start_h"]) | (df["hour"] > df["stay_key"].map(window["end"]))
         rep["rows_outside_window"] += int(outside.sum())
         df = df[~outside]
     df = df.assign(concept=concept)
     n0 = len(df)
-    df = df.drop_duplicates(["stay_key", "hour", "value", "value_text", "source"])
+    if concept not in NO_DEDUP:
+        df = df.drop_duplicates(["stay_key", "hour", "value", "value_text", "source"])
     rep["rows_dup"] += n0 - len(df)
     df["hour"] = df["hour"].astype("float32")
     df["value"] = df["value"].astype("float32")
-    return df[["stay_key", "concept", "hour", "value", "value_text", "flag", "source"]]
+    df["value_raw"] = df["value_raw"].astype("string")
+    df["src_row"] = df["src_row"].astype("Int32")
+    return df[["stay_key", "concept", "hour", "value", "value_text", "value_raw", "flag", "source", "src_row"]]
 
 
 # ------------------------------------------------------------------ all concepts
 def harmonise_all(assembled_dir, static, out_dir, concepts=None, sites=C.SITES, groups_skip=SKIP_GROUPS, apply_window=True):
     """Write one parquet per site and group to out_dir (derived/harmonised/) and return a counts-only report: per site and concept the
     stays and rows kept, rows read, rows outside the cohort, with a bad time or outside the stay window (stay_window), rows set missing or converted or derived, and the
-    percentiles of `hour` (5th, 50th, 95th) as a check on the clock."""
+    percentiles of `hour` (5th, 50th, 95th) as a check on the clock.
+    concepts=None runs everything and rewrites the files. With a list of concepts only those are recomputed: their old rows are replaced
+    inside the existing site and group files and their report rows in `_report.csv`; everything else is left as it is. The returned report is
+    always the whole report. Use the list after changing a rule for some concepts (a full run takes minutes).
+    Also writes `{site}_rejected.parquet`: the rows removed by a value rule (non_numeric, zero_missing, diastolic_copy) with the recorded text
+    and `src_row`, so every change can be checked against the original. Rows outside the cohort or the stay window are selections, not
+    changes, and are only counted. The rejected files can hold free text (non-numeric entries): they are handled at anonymisation."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     co = cohort(static)
     wins = stay_window(assembled_dir, static) if apply_window else None
     names = [n for n in C.CONCEPTS if (n in concepts if concepts else C.CONCEPTS[n]["group"] not in groups_skip)]
+    partial = bool(concepts)
     rows = []
     for site in sites:
         keep = co[co["site"] == site].set_index("stay_key")["t0_utc"]
         win = None if wins is None else {"start_h": -PRE_HOURS, "end": wins[wins["site"] == site].set_index("stay_key")["end_h"]}
         by_group = {}
+        rej = []
         for n in names:
             if not C.CONCEPTS[n].get(site):
                 continue
             rep = {}
-            df = harmonise_concept(assembled_dir, site, n, keep, rep, window=win)
+            df = harmonise_concept(assembled_dir, site, n, keep, rep, window=win, rejected=rej)
             by_group.setdefault(C.CONCEPTS[n]["group"], []).append(df)
             rows.append({"site": site, "concept": n, "cohort_stays": len(keep), "stays": int(df["stay_key"].nunique()), "rows": len(df),
                          **rep, "hour_p5": float(df["hour"].quantile(.05)) if len(df) else np.nan,
@@ -256,8 +317,27 @@ def harmonise_all(assembled_dir, static, out_dir, concepts=None, sites=C.SITES, 
         for g, parts in by_group.items():
             d = pd.concat(parts, ignore_index=True)
             d.insert(0, "site", site)
-            d.to_parquet(out_dir / f"{site}_{g.replace(' ', '_')}.parquet", index=False)
-    return pd.DataFrame(rows)
+            path = out_dir / f"{site}_{g.replace(' ', '_')}.parquet"
+            if partial and path.exists():
+                old = pd.read_parquet(path)
+                d = pd.concat([old[~old["concept"].isin(d["concept"].unique())], d], ignore_index=True)
+            d.to_parquet(path, index=False)
+        rj = pd.concat(rej, ignore_index=True) if rej else pd.DataFrame(columns=["stay_key", "concept", "hour", "value_raw", "reason", "source", "src_row"])
+        rj["src_row"] = rj["src_row"].astype("Int32")
+        rj.insert(0, "site", site)
+        rpath = out_dir / f"{site}_rejected.parquet"
+        if partial and rpath.exists():
+            old = pd.read_parquet(rpath)
+            rj = pd.concat([old[~old["concept"].isin(names)], rj], ignore_index=True)
+        rj.to_parquet(rpath, index=False)
+    new = pd.DataFrame(rows)
+    rp = out_dir / "_report.csv"
+    if partial and rp.exists():
+        old = pd.read_csv(rp)
+        old = old.merge(new[["site", "concept"]].assign(_new=1), on=["site", "concept"], how="left")
+        new = pd.concat([old[old["_new"].isna()].drop(columns="_new"), new], ignore_index=True)
+    new.to_csv(rp, index=False)
+    return new
 
 
 def time_alignment_check(assembled_dir, static, concept="hr", sites=C.SITES):
@@ -451,6 +531,8 @@ def window_check(harmonised_dir, static, sites=C.SITES, assembled_dir=None):
     out = []
     for site in sites:
         for f in sorted(harmonised_dir.glob(f"{site}_*.parquet")):
+            if f.stem.endswith("_rejected"):
+                continue
             d = pd.read_parquet(f, columns=["stay_key", "concept", "hour"])
             ends = pd.Series(list(zip([site] * len(d), d["stay_key"].astype(str))), index=d.index).map(los)
             h = d["hour"].astype("float64")
@@ -475,6 +557,8 @@ def stay_span_check(harmonised_dir, static, concepts=("hr", "spo2", "intake_tota
     for site in sites:
         parts = []
         for f in sorted(harmonised_dir.glob(f"{site}_*.parquet")):
+            if f.stem.endswith("_rejected"):
+                continue
             d = pd.read_parquet(f, columns=["stay_key", "concept", "hour"])
             parts.append(d[d["concept"].isin(concepts)])
         d = pd.concat(parts, ignore_index=True)
@@ -552,3 +636,305 @@ def rbh_unit_check(assembled_dir, static):
     return pd.DataFrame({"rows": g.size(), "stays": g["stay_key"].nunique(), "pct_before_24h": 100 * g["before24"].mean(),
                          "pct_pre_t0": 100 * g["pre"].mean(), "pct_inside": 100 * g["inside"].mean(),
                          "pct_after_end": 100 * g["after"].mean()}).round(1).sort_values("rows", ascending=False)
+
+
+# ------------------------------------------------------------------ distributions across sites
+QUANTILES = (0.001, 0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99, 0.999)
+QNAMES = ("p0.1", "p1", "p5", "p25", "p50", "p75", "p95", "p99", "p99.9")
+
+
+def distribution_check(harmonised_dir, sites=C.SITES, concepts=None, min_stays=10):
+    """Per site and concept (fluids per source, in `source`): stays, rows, quantiles of `value` from p0.1 to p99.9, the share of zero, negative and
+    flagged rows, and the median number of rows per stay. Numeric concepts only. The minimum and maximum are not reported (a single row);
+    combinations seen in fewer than `min_stays` stays are left out. Counts and ranges only. Returns the long table."""
+    harmonised_dir = Path(harmonised_dir)
+    rows = []
+    for site in sites:
+        for f in sorted(harmonised_dir.glob(f"{site}_*.parquet")):
+            if f.stem.endswith("_rejected"):
+                continue
+            d = pd.read_parquet(f, columns=["stay_key", "concept", "value", "flag", "source"])
+            d = d[d["value"].notna()]
+            d["flag"] = d["flag"].fillna("").astype("string")
+            d["src"] = d["source"].astype("string") if f.stem.endswith("_fluids") else ""
+            for (key, src), g in d.groupby(["concept", "src"], sort=False):
+                stays = g["stay_key"].nunique()
+                if stays < min_stays:
+                    continue
+                v = g["value"].astype("float64").to_numpy()
+                q = np.quantile(v, QUANTILES)
+                fl = g["flag"]
+                flagged = (fl != "")
+                rows.append({"site": site, "concept": key, "source": src, "stays": stays, "rows": len(g), "rows_per_stay_median": float(g.groupby("stay_key").size().median()),
+                             **dict(zip(QNAMES, q.astype(float))),
+                             "pct_zero": round(100 * float((v == 0).mean()), 2), "pct_negative": round(100 * float((v < 0).mean()), 2),
+                             "pct_flagged": round(100 * float(flagged.mean()), 2),
+                             "flags": ", ".join(f"{k}:{n}" for k, n in fl[flagged].value_counts().items())})
+            del d
+    return pd.DataFrame(rows)
+
+
+def compare_sites(detail, sites=C.SITES, ratio=3.0, zero_gap=20.0, tail_ratio=10.0):
+    """One row per concept with p5 / median / p95 per site and flags for what to look at (not errors, just places to look):
+    scale (largest median more than `ratio` times the smallest, or a sign change), spread (IQR ratio above `ratio`),
+    tail (at a site: p99.9 more than `tail_ratio` times p99, or p99 more than 3 times p95, or p95 more than `tail_ratio` times p75), zeros (share of zeros differs by more than `zero_gap` points).
+    `looks_ok` is True when nothing is flagged. Needs sites to share a concept to compare; others are listed with a single site."""
+    rows = []
+    detail = detail.sort_values("stays", ascending=False).drop_duplicates(["concept", "site"])      # fluids: the source with most stays
+    for name, g in detail.groupby("concept", sort=False):
+        g = g.set_index("site")
+        row = {"concept": name, "sites": len(g)}
+        for s in sites:
+            row[s] = f"{g.loc[s, 'p5']:.4g} / {g.loc[s, 'p50']:.4g} / {g.loc[s, 'p95']:.4g}" if s in g.index else ""
+        med, iqr = g["p50"], g["p75"] - g["p25"]
+        pos = med[med > 0]
+        row["scale"] = bool(len(g) > 1 and (((med > 0).any() and (med < 0).any()) or (len(pos) == len(med) and med.max() / med.min() > ratio)))
+        ip = iqr[iqr > 0]
+        row["spread"] = bool(len(ip) > 1 and ip.max() / ip.min() > ratio)
+        row["tail"] = bool((((g["p99"] > 0) & (g["p99.9"] > tail_ratio * g["p99"]))
+                            | ((g["p95"] > 0) & (g["p99"] > 3 * g["p95"]))
+                            | ((g["p75"] > 0) & (g["p95"] > tail_ratio * g["p75"]))).any())
+        row["zeros"] = bool(len(g) > 1 and g["pct_zero"].max() - g["pct_zero"].min() > zero_gap)
+        row["looks_ok"] = not (row["scale"] or row["spread"] or row["tail"] or row["zeros"])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def source_check(harmonised_dir, site, concept, min_stays=10):
+    """Quantiles of one concept at one site split by source (the position of the source in the concept map, with its description), to
+    find a source that holds a different quantity or unit. Counts and ranges only."""
+    f = Path(harmonised_dir) / f"{site}_{C.CONCEPTS[concept]['group'].replace(' ', '_')}.parquet"
+    d = pd.read_parquet(f, columns=["stay_key", "concept", "value", "source"])
+    d = d[(d["concept"] == concept) & d["value"].notna()]
+    rows = []
+    for src, g in d.groupby("source"):
+        if g["stay_key"].nunique() < min_stays:
+            continue
+        q = np.quantile(g["value"].astype("float64"), QUANTILES)
+        desc = C.CONCEPTS[concept][site][int(src)] if str(src).isdigit() and int(src) < len(C.CONCEPTS[concept][site]) else ""
+        rows.append({"source": src, "description": str(desc)[-70:], "stays": g["stay_key"].nunique(), "rows": len(g), **dict(zip(QNAMES, q.astype(float)))})
+    return pd.DataFrame(rows)
+
+
+def values_above(harmonised_dir, site, concept, above, top=15, min_stays=10):
+    """The most common values above a limit for one concept and site, with rows and stays (values in fewer than `min_stays` stays are
+    left out). Shows placeholder values (the same number again and again) and the share of rows above the limit. Counts only."""
+    f = Path(harmonised_dir) / f"{site}_{C.CONCEPTS[concept]['group'].replace(' ', '_')}.parquet"
+    d = pd.read_parquet(f, columns=["stay_key", "concept", "value"])
+    d = d[(d["concept"] == concept) & d["value"].notna()]
+    hi = d[d["value"] > above]
+    print(f"{site} {concept}: {len(hi)} of {len(d)} rows ({100 * len(hi) / max(len(d), 1):.2f}%) above {above}")
+    g = hi.groupby("value")
+    out = pd.DataFrame({"rows": g.size(), "stays": g["stay_key"].nunique()}).sort_values("rows", ascending=False)
+    return out[out["stays"] >= min_stays].head(top)
+
+
+def ie_check(harmonised_dir, site="SMH", values=(1.1, 1.4, 1.5, 1.9, 2, 4, 11, 12, 14, 15, 16, 19), min_stays=10):
+    """For the recorded I:E values listed, the ratio implied by the set rate and inspiratory time at the same chart time,
+    expiratory over inspiratory = (60 / rate - inspiratory time) / inspiratory time (as in the recorded 1:x). Shows whether a recorded
+    '14' behaves like 1.4 or like 4. Rows with a rate and inspiratory time only. Counts and quantiles only."""
+    g = C.CONCEPTS["ie_ratio"]["group"].replace(" ", "_")
+    d = pd.read_parquet(Path(harmonised_dir) / f"{site}_{g}.parquet", columns=["stay_key", "concept", "hour", "value"])
+    w = {n: d[d["concept"] == n].drop(columns="concept").rename(columns={"value": n}).drop_duplicates(["stay_key", "hour"]) for n in ("ie_ratio", "rr_set", "insp_time")}
+    m = w["ie_ratio"].merge(w["rr_set"], on=["stay_key", "hour"]).merge(w["insp_time"], on=["stay_key", "hour"])
+    m = m[(m["rr_set"] > 0) & (m["insp_time"] > 0) & (60 / m["rr_set"] > m["insp_time"])]
+    m["implied"] = (60 / m["rr_set"] - m["insp_time"]) / m["insp_time"]
+    rows = []
+    for v in values:
+        s = m[np.isclose(m["ie_ratio"], v)]
+        if s["stay_key"].nunique() < min_stays:
+            continue
+        q = s["implied"].quantile([.25, .5, .75])
+        rows.append({"recorded": v, "rows": len(s), "stays": s["stay_key"].nunique(), "implied_p25": q.iloc[0], "implied_median": q.iloc[1], "implied_p75": q.iloc[2]})
+    return pd.DataFrame(rows)
+
+
+# ------------------------------------------------------------------ drugs (as recorded)
+def _drug_kind(unit):
+    """What a recorded drug value is, from its unit alone (a lookup, nothing converted): rate_per_kg (mg/kg/hr, microg/kg/min, units/kg/min),
+    rate (mg/hr, micrograms/hr), pump_rate (ml/hr), concentration (mg/ml), weight (kg), volume (ml), amount (mg, microgram, units, drops,
+    application), unspecified (no unit), other."""
+    if unit is None or pd.isna(unit) or str(unit).strip() == "":
+        return "unspecified"
+    u = str(unit).lower().replace(" ", "")
+    if "/kg/" in u:
+        return "rate_per_kg"
+    if u in ("ml/hr", "ml/h", "ml/min"):
+        return "pump_rate"
+    if u.endswith("/ml"):
+        return "concentration"
+    if u.endswith("/hr") or u.endswith("/h") or u.endswith("/min"):
+        return "rate"
+    if u == "kg":
+        return "weight"
+    if u == "ml":
+        return "volume"
+    if any(u.startswith(a) for a in ("mg", "mcg", "microg", "ug", "unit", "drop", "appl", "g")):
+        return "amount"
+    return "other"
+
+
+def _read_drug(assembled_dir, site, src):
+    """Rows of one drug source: stay, t (row time text), raw (the recorded value as text), unit, route, src_row. Filtered to the drug by the
+    source's label rule. RBH: Dose with Dose_Unit (meds also Route). SMH: the number and unit are cut out of Dosage_verbose ('9 mcg/kg/hr').
+    GOSH: valueNumber with unitOfMeasure; the medication administration table has no dose value, so raw holds prn_dose where present."""
+    base = Path(assembled_dir) / site
+    names = lambda p: {n.lower(): n for n in C.pq.ParquetFile(p).schema.names}
+    if site == "RBH":
+        p = base / f"ai_picu_{src[0]}.parquet"
+        stay, label, value, unit, route, prn = "stay_key", src[2], src[1], "Dose_Unit", "Route", None
+    elif site == "SMH":
+        p = C.SM._path(base, src[0])
+        stay, label, value, unit, route, prn = "encounterId", src[1], "Dosage_verbose", None, None, None
+    else:
+        p = base / f"{src[0]}.parquet"
+        admin = src[0].endswith("medication_admins")
+        stay, label, value, unit, route, prn = "stay_id", src[2], (None if admin else src[1]), (None if admin else "unitOfMeasure"), ("route_name" if admin else None), ("prn_dose" if admin else None)
+    nm = names(p)
+    tcol = C.time_column(p)
+    want = [c for c in (stay, label, value, unit, route, prn, tcol) if c and c.lower() in nm]
+    df = pd.read_parquet(p, columns=[nm[c.lower()] for c in dict.fromkeys(want)])
+    df.columns = [c.lower() for c in df.columns]
+    get = lambda c: df[c.lower()] if c and c.lower() in df.columns else pd.Series(pd.NA, index=df.index, dtype="string")
+    keep = C._label_mask(get(label), src[-1])
+    out = pd.DataFrame({"stay": get(stay).astype(str), "t": get(tcol), "raw": _clean_text(get(value or prn)),
+                        "unit": get(unit).astype("string").str.strip(), "route": get(route).astype("string").str.strip(), "src_row": df.index.to_numpy(dtype="int64")})
+    return out[keep.to_numpy(dtype=bool)].copy()
+
+
+def harmonise_drugs(assembled_dir, static, out_dir, sites=C.SITES, apply_window=True):
+    """Drug records as recorded, nothing converted or pooled: one parquet per site (`{site}_drugs.parquet`) with site, stay_key, concept,
+    hour, value (the recorded number, float32), unit (as recorded), kind (from the unit, see _drug_kind), route, value_raw (the recorded text
+    where the number was cut out of text, or the text where it is not a number), source, src_row. The same record in two tables (RBH `meds`
+    and `infusion`, `sedation` and `sedation_old`) is kept once. Records with no dose written (about half of some SMH infusions, probably starts and stops) are kept with an empty value. Window rule as for the other concepts. Returns (report, units): rows, stays and the
+    rows dropped by each rule by site and drug concept, and rows and stays by site, drug concept, kind and unit. Counts only."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    co = cohort(static)
+    wins = stay_window(assembled_dir, static) if apply_window else None
+    names = [n for n in C.CONCEPTS if C.CONCEPTS[n]["group"] == "drugs"]
+    rep_rows, unit_rows = [], []
+    for site in sites:
+        keep = co[co["site"] == site].set_index("stay_key")["t0_utc"]
+        win = None if wins is None else wins[wins["site"] == site].set_index("stay_key")["end_h"]
+        parts = []
+        for n in names:
+            c = {"rows_read": 0, "rows_bad_time": 0, "rows_outside_window": 0, "rows_dup": 0, "rows_empty": 0}                    # rows_empty: records with no dose recorded (kept)
+            frames = []
+            for i, src in enumerate(C.CONCEPTS[n].get(site, [])):
+                df = _read_drug(assembled_dir, site, src)
+                c["rows_read"] += len(df)
+                df = df[df["stay"].isin(keep.index)].copy()
+                df["hour"] = to_hours(df["t"], site, df["stay"].map(keep))
+                c["rows_bad_time"] += int(df["hour"].isna().sum())
+                df = df.dropna(subset=["hour"])
+                c["rows_empty"] += int(df["raw"].isna().sum())          # records with no dose written: kept, as the record of a drug event
+                if site == "SMH":
+                    ex = df["raw"].str.extract(r"^\s*(-?\d+(?:\.\d+)?)\s*(.*?)\s*$")
+                    df = df.assign(value=_f64(ex[0]), unit=ex[1].mask(ex[1].fillna("") == ""), value_raw=df["raw"])
+                else:
+                    v = _f64(df["raw"])
+                    df = df.assign(value=v, value_raw=df["raw"].where(v.isna()))
+                df["source"] = str(i)
+                frames.append(df)
+            if not frames:
+                continue
+            d = pd.concat(frames, ignore_index=True)
+            if win is not None:
+                outside = ((d["hour"] < -PRE_HOURS) | (d["hour"] > d["stay"].map(win))).to_numpy(dtype=bool)
+                c["rows_outside_window"] += int(outside.sum())
+                d = d[~outside]
+            n0 = len(d)
+            d = d.drop_duplicates(["stay", "hour", "value", "unit", "value_raw"])
+            c["rows_dup"] += n0 - len(d)
+            d["concept"] = n
+            d["kind"] = d["unit"].map(_drug_kind)
+            parts.append(d)
+            rep_rows.append({"site": site, "concept": n, "stays": d["stay"].nunique(), "rows": len(d), **c})
+        if parts:
+            allp = pd.concat(parts, ignore_index=True)
+            allp = allp.rename(columns={"stay": "stay_key"})
+            allp["hour"] = allp["hour"].astype("float32")
+            allp["value"] = allp["value"].astype("float32")
+            allp["src_row"] = allp["src_row"].astype("Int32")
+            for col in ("unit", "route", "value_raw"):
+                allp[col] = allp[col].astype("string")
+            allp.insert(0, "site", site)
+            allp[["site", "stay_key", "concept", "hour", "value", "unit", "kind", "route", "value_raw", "source", "src_row"]].to_parquet(out_dir / f"{site}_drugs.parquet", index=False)
+            u = allp.assign(unit=allp["unit"].fillna("(none)")).groupby(["concept", "kind", "unit"])
+            unit_rows += [{"site": site, "concept": cn, "kind": k, "unit": un, "stays": s["stay_key"].nunique(), "rows": len(s)} for (cn, k, un), s in u]
+    return pd.DataFrame(rep_rows), pd.DataFrame(unit_rows)
+
+
+def load_pooled(harmonised_dir, sites=C.SITES, groups=None, concepts=None, drugs=False, columns=None):
+    """The three sites stacked into one frame, read from the per-site files (no pooled file is written). Stay keys are unique only within a
+    site, so the frame carries `stay_uid` = site + ":" + stay_key; use it, never `stay_key` alone, to group stays. No patient linkage across
+    sites is attempted or implied. groups: list of file groups (for example ["vitals", "labs"]; None = every group file except rejected,
+    fluids and drugs); concepts: keep only these concepts; drugs=True loads the drug files instead (they have unit, kind and route)."""
+    d = Path(harmonised_dir)
+    frames = []
+    for site in sites:
+        if drugs:
+            files = [d / f"{site}_drugs.parquet"]
+        else:
+            files = sorted(d.glob(f"{site}_*.parquet"))
+            files = [f for f in files if not f.stem.endswith(("_rejected", "_drugs"))]
+            if groups is not None:
+                files = [f for f in files if f.stem[len(site) + 1:] in groups]
+        for f in files:
+            if not f.exists():
+                continue
+            df = pd.read_parquet(f, columns=columns)
+            if concepts is not None:
+                df = df[df["concept"].isin(concepts)]
+            frames.append(df)
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if len(out) and "site" in out.columns and "stay_key" in out.columns:
+        out.insert(0, "stay_uid", out["site"].astype(str) + ":" + out["stay_key"].astype(str))
+    return out
+
+
+_AMT = {"mg": 1.0, "g": 1000.0, "mcg": 1e-3, "microg": 1e-3, "microgram": 1e-3, "micrograms": 1e-3, "ug": 1e-3, "ng": 1e-6,
+        "nanog": 1e-6, "nanogram": 1e-6, "nanograms": 1e-6, "unit": 1.0, "units": 1.0, "iu": 1.0, "mmol": 1.0, "ml": 1.0}
+_TIME = {"hr": 1.0, "h": 1.0, "hour": 1.0, "min": 60.0, "minute": 60.0, "sec": 3600.0, "s": 3600.0, "day": 1 / 24, "24hr": 1 / 24}
+
+
+def drug_unit_lookup(harmonised_dir, sites=C.SITES, min_stays=10):
+    """Lookup of the drug units as recorded, for users who want to convert doses themselves. One row per unit string seen in at least
+    `min_stays` stays at a site (rarer strings are not listed): rows, stays, kind, the parsed amount unit, per_kg, time unit, `base_unit`
+    and `factor`: multiply the recorded value by `factor` to get the value in `base_unit`. Base units: mg (or units, mmol) for amounts,
+    mg/ml (or units/ml) for concentrations, mg/h and mg/kg/h for rates, ml/h for pump rates, kg and ml unchanged. Strings that do not
+    parse (drops, applications, no unit) have an empty factor; nothing is guessed. Counts only, no values. The harmonised data are never
+    converted."""
+    import re
+    rows = []
+    for site in sites:
+        f = Path(harmonised_dir) / f"{site}_drugs.parquet"
+        if not f.exists():
+            continue
+        df = pd.read_parquet(f, columns=["stay_key", "unit", "kind"])
+        df["unit"] = df["unit"].astype("string").fillna("(none)")
+        g = df.groupby("unit")
+        res = pd.DataFrame({"rows": g.size(), "stays": g["stay_key"].nunique(), "kind": g["kind"].first()}).reset_index()
+        res = res[res["stays"] >= min_stays]
+        for _, r in res.iterrows():
+            u = str(r["unit"]).lower().replace(" ", "")
+            amt = tm = fac = base = None
+            perkg = False
+            m = re.fullmatch(r"([a-z]+)(/kg)?/([0-9]*[a-z]+)", u)
+            if m and m.group(3) == "ml" and m.group(1) in _AMT and not m.group(2):
+                amt, fac = m.group(1), _AMT[m.group(1)]                                  # concentration
+                base = "units/ml" if amt in ("unit", "units", "iu") else ("mmol/ml" if amt == "mmol" else "mg/ml")
+            elif m and m.group(1) in _AMT and m.group(3) in _TIME:
+                amt, perkg, tm = m.group(1), bool(m.group(2)), m.group(3)
+                fac = _AMT[amt] * _TIME[tm]
+                unit = "ml" if amt == "ml" else ("units" if amt in ("unit", "units", "iu") else ("mmol" if amt == "mmol" else "mg"))
+                base = f"{unit}/kg/h" if perkg else f"{unit}/h"
+            elif u in _AMT and u != "ml":
+                amt, fac = u, _AMT[u]                                                    # plain amount
+                base = "units" if u in ("unit", "units", "iu") else ("mmol" if u == "mmol" else "mg")
+            elif u in ("kg", "ml"):
+                amt, fac, base = u, 1.0, u
+            rows.append({"site": site, "unit": r["unit"], "rows": r["rows"], "stays": r["stays"], "kind": r["kind"],
+                         "amount_unit": amt, "per_kg": perkg if amt else None, "time_unit": tm, "base_unit": base, "factor": fac})
+    return pd.DataFrame(rows)

@@ -86,13 +86,17 @@ CONCEPTS = {
     "compliance_dynamic": _c("vent", [("vent", "Compliance_Dynamic")], note="RBH only"),
     "airway_device": _c("vent", [("vent", "Airway")], [("airway", "airwayType")], [(_VENT + "vent_airway_device_merged", GV)], note="text"),
     "ett_size": _c("vent", [("airway", "sizeETT")], [("airway", "ETT_paed")], [(_VENT + "Endotracheal_size_merged", GV), (_VENT + "ETT_size_merged", GV)],
-                   note="SMH ETT_paed holds site and size attributes, so rows are not all sizes"),
+                   note="SMH ETT_paed holds size, depth in cm, route and cuff in one source: harmonise.py sends each kind to its own concept"),
+    "ett_depth": _c("vent", SMH=[("airway", "ETT_paed")], note="SMH only: depth of the tube in cm, from the same source as ett_size ('12cm')"),
+    "ett_route": _c("vent", SMH=[("airway", "ETT_paed")], note="SMH only, text: Oral or Nasal, from the same source as ett_size"),
+    "ett_cuff": _c("vent", SMH=[("airway", "ETT_paed")], note="SMH only, text: Cuffed or Un-cuffed, from the same source as ett_size"),
     # ---- blood gas (GOSH: one long table, filtered by the label in standard_variable; units are in the label) ----
     "bg_ph": _c("blood gas", [("bg", "pH")], [("bg", "pH")], [(_BG, GV, _BGL, ["pH"])]),
     "bg_pco2": _c("blood gas", [("bg", "pCO2")], [("bg", "PCO2")], [(_BG, GV, _BGL, ["pCO2 kPa"])], note="GOSH and SMH kPa; RBH unit: check"),
     "bg_po2": _c("blood gas", [("bg", "pO2")], [("bg", "PO2")], [(_BG, GV, _BGL, ["pO2 kPa"])], note="GOSH and SMH kPa; RBH unit: check"),
     "bg_hco3": _c("blood gas", [("bg", "HCO3")], [("bg", "HCO3")], [(_BG, GV, _BGL, ["HCO3 mmol/L"])]),
     "bg_base_excess": _c("blood gas", [("bg", "BE")], [("bg", "baseExcess")], [(_BG, GV, _BGL, ["Base Excess mmol/L"])]),
+    "bg_base_excess_recorded": _c("blood gas", GOSH=[(_BG, GV, _BGL, ["Base Excess mmol/L"])], note="GOSH only: the recorded value, which has lost its sign (G3); kept next to the derived bg_base_excess"),
     "bg_lactate": _c("blood gas", [("bg", "Lactate")], [("bg", "lactate")], [(_BG, GV, _BGL, ["Lactate mmol/L"])], note="GOSH also has a unit-less 'Lactate' label (118 stays), not included"),
     "bg_glucose": _c("blood gas", [("bg", "Glucose")], [("bg", "glucose_bg")], [(_BG, GV, _BGL, ["Glucose mmol/L"])]),
     "bg_sodium": _c("blood gas", [("bg", "Sodium")], [("bg", "sodium_bg")], [(_BG, GV, _BGL, ["Na+ mmol/L"])]),
@@ -105,7 +109,8 @@ CONCEPTS = {
                  note="GOSH has three labels with different units (percent, fraction, unstated): convert before pooling; RBH has none in the blood gas"),
     "bg_methb": _c("blood gas", [("bg", "MetHb")], [("bg", "MetHb_bg")], [(_BG, GV, _BGL, ["MetHb %"])]),
     "bg_o2_sat": _c("blood gas", [("bg", "O2_Sat")], [("bg", "SaO2")], [(_BG, GV, _BGL, ["SaO2 %"])], note="GOSH SaO2 covers more stays than the other gas values: check what it contains"),
-    "bg_venous_sat": _c("blood gas", GOSH=[(_BG, GV, _BGL, ["SvO2 %"]), (_BG, GV, _BGL, ["CvO2"])], note="GOSH only"),
+    "bg_venous_sat": _c("blood gas", GOSH=[(_BG, GV, _BGL, ["SvO2 %"])], note="GOSH only, few stays"),
+    "bg_cvo2": _c("blood gas", GOSH=[(_BG, GV, _BGL, ["CvO2"])], note="GOSH only; a content (median about 9, unit not stated), not a saturation: kept apart from bg_venous_sat"),
     "bg_sample_type": _c("blood gas", [("bg", "SampleTypeDesc")], [("bg", "bg_source")], [(_BG, GV, _BGL, ["Blood Gas Type"])], note="text; GOSH very sparse"),
     # ---- laboratory ----
     "wbc": _c("lab", [("full_blood_count", "WBC")], [("labs", "WBC")], [(_L + "WBC_merged", GV), (_L + "merged_wbc", GV)], note="GOSH two files overlap"),
@@ -114,11 +119,11 @@ CONCEPTS = {
     "platelets": _c("lab", [("full_blood_count", "Plt")], [("labs", "PLT")], [(_L + "Platelets_merged", GV)]),
     "haemoglobin": _c("lab", [("full_blood_count", "Hb")], [("labs", "Hb(g/dL)"), ("labs", "Hb(g/L)")], [(_L + "Haemoglobin_merged", GV), (_L + "merged_Hb", GV)], note="units differ: check; GOSH two files overlap"),
     "sodium": _c("lab", [("biochemistry", "Sodium")], [("labs", "sodium_lab")], [(_L + "Sodium_merged", GV)]),
-    "potassium": _c("lab", [("biochemistry", "Potassium")], [("labs", "potassium_lab")], [(_L + "Potassium_merged", GV)]),
+    "potassium": _c("lab", [("biochemistry", "Potassium")], [("labs", "potassium_lab")], [(_L + "Potassium_merged", GV, "unit_of_measure", ["mmol/L"])], note="GOSH: rows in mmol/mmol creatinine (a urine ratio) left out by the unit"),
     "urea": _c("lab", [("biochemistry", "Urea")], [("labs", "urea")], [(_L + "Urea_merged", GV)]),
     "creatinine": _c("lab", [("biochemistry", "Creatinine")], [("labs", "creatinine")], [(_L + "Creatinine_merged", GV)]),
     "bilirubin": _c("lab", [("biochemistry", "Bilirubin")], [("labs", "totalBilirubin")], [(_L + "TotalBilirubin_merged", GV)], note="RBH total or direct: check"),
-    "albumin": _c("lab", [("biochemistry", "Albumin")], [("labs", "albumin")], [(_L + "Albumin_merged", GV)]),
+    "albumin": _c("lab", [("biochemistry", "Albumin")], [("labs", "albumin")], [(_L + "Albumin_merged", GV, "unit_of_measure", ["g/L"])], note="GOSH: rows in mg/L and mg/mmol (urine albumin) left out by the unit"),
     "alt": _c("lab", [("biochemistry", "ALT")], [("labs", "ALT")], [(_L + "ALT_merged", GV)]),
     "calcium": _c("lab", [("biochemistry", "Calcium")], [("labs", "calcium_lab")], [(_L + "Calcium_merged", GV)]),
     "phosphate": _c("lab", [("biochemistry", "Phosphate")], [("labs", "phosphate")], [(_L + "Phosphate_merged", GV)]),
@@ -1006,3 +1011,183 @@ def rbh_io_by_year(assembled_dir, subset=("IV_Infusion", "IV_Meds", "Colloids", 
     for c in list(subset) + list(others):
         out[f"nz_{c}"] = 100 * g[c].apply(lambda x: (x.fillna(0) != 0).mean())
     return out.round(1)
+
+
+def concept_values(assembled_dir, concept, site, min_stays=10, top=40):
+    """The distinct values of a text concept at one site, read through the concept map (so any source type works: RBH or GOSH column, GOSH
+    label rows, SMH ID-based), with rows and stays. Values seen in fewer than `min_stays` stays are not shown. Counts only."""
+    parts = [_read(assembled_dir, site, src) for src in CONCEPTS[concept][site]]
+    df = pd.concat(parts, ignore_index=True)
+    df["value"] = df["value"].astype("string").str.strip()
+    df = df[_present(df["value"])]
+    g = df.groupby("value")
+    res = pd.DataFrame({"rows": g.size(), "stays": g["stay"].nunique()}).sort_values("stays", ascending=False)
+    shown = res[res["stays"] >= min_stays].head(top)
+    print(f"{site} {concept}: {len(res)} distinct values; {len(shown)} shown (>= {min_stays} stays)")
+    print(shown.to_string())
+    return shown
+
+
+def units_by_concept(assembled_dir, site="GOSH", unit_col="unit_of_measure", group="lab", min_rows=200):
+    """For the concepts of one group at one site, the rows and p5 / median / p95 by unit, shown only for concepts that have more than
+    one unit. Finds rows that are a different quantity (a ratio, another specimen) before pooling. Counts and ranges only; sources that have
+    no unit column are skipped."""
+    rows = []
+    for name, c in CONCEPTS.items():
+        if c["group"] != group:
+            continue
+        for src in c.get(site, []):
+            p = Path(assembled_dir) / site / f"{src[0]}.parquet"
+            if not p.exists() or unit_col.lower() not in [n.lower() for n in pq.ParquetFile(p).schema.names]:
+                continue
+            df = pd.read_parquet(p, columns=SM._cols(p, tuple(dict.fromkeys((src[1], unit_col) + ((src[2],) if len(src) > 2 else ())))))
+            if len(src) > 2 and src[2].lower() != unit_col.lower():          # a filter on the unit itself is not applied: all units are shown
+                df = df[_label_mask(df[src[2]], src[3])]
+            df = pd.DataFrame({"unit": df[unit_col].astype("string").fillna("(none)"), "v": pd.to_numeric(df[src[1]].astype("string"), errors="coerce").astype("float64")})
+            if df["unit"].nunique() < 2:
+                continue
+            for u, g in df.groupby("unit"):
+                if len(g) < min_rows:
+                    continue
+                v = g["v"].dropna()
+                rows.append({"concept": name, "unit": u, "rows": len(g), "p5": v.quantile(.05) if len(v) else np.nan,
+                             "median": v.median() if len(v) else np.nan, "p95": v.quantile(.95) if len(v) else np.nan})
+    return pd.DataFrame(rows)
+
+
+def drug_table_columns(assembled_dir):
+    """The tables behind the drug concepts, with the drugs each table serves, its row count and the column names with their types.
+    Names and types only, no values. Use it to plan how doses, rates, units and start and stop times are carried."""
+    seen = {}
+    for name, c in CONCEPTS.items():
+        if c["group"] != "drugs":
+            continue
+        for site in SITES:
+            for src in c[site]:
+                seen.setdefault((site, src[0]), []).append(name.replace("drug_", ""))
+    rows = []
+    for (site, table), drugs in seen.items():
+        base = Path(assembled_dir) / site
+        p = SM._path(base, table) if site == "SMH" else base / (f"ai_picu_{table}.parquet" if site == "RBH" else f"{table}.parquet")
+        pf = pq.ParquetFile(p)
+        rows.append({"site": site, "table": table, "rows": pf.metadata.num_rows, "drugs": len(drugs),
+                     "columns": ", ".join(f"{f.name}:{str(f.type).replace('large_', '')}" for f in pf.schema_arrow)})
+    return pd.DataFrame(rows)
+
+
+def list_shapes(assembled_dir, site, table, column, min_stays=10, top=40, where=None):
+    """The most common SHAPES of the values of one column (each run of digits replaced by 9, so '0.5 mcg/kg/min' becomes '9 mcg/kg/min'),
+    with rows and stays; shapes seen in fewer than `min_stays` stays are not shown. Shows the units and wording around numbers without any
+    number. Table names as in list_values."""
+    import re
+    base = Path(assembled_dir) / site
+    p = base / f"{table}.parquet" if site != "SMH" else SM._path(base, table)
+    stay = STAY.get(site, "encounterId")
+    want = (stay, column) + ((where[0],) if where else ())
+    df = pd.read_parquet(p, columns=SM._cols(p, want))
+    df.columns = ["stay", "v"] + (["w"] if where else [])
+    if where:
+        df = df[df["w"] == where[1]]
+    df = df[_present(df["v"])]
+    df["shape"] = df["v"].astype("string").str.strip().map(lambda x: re.sub(r"\d+(\.\d+)?", "9", x))
+    g = df.groupby("shape")
+    res = pd.DataFrame({"rows": g.size(), "stays": g["stay"].nunique()}).sort_values("stays", ascending=False)
+    shown = res[res["stays"] >= min_stays].head(top)
+    print(f"{site} {table}.{column}: {len(res)} distinct shapes; {len(shown)} shown (>= {min_stays} stays)")
+    print(shown.to_string())
+    return shown
+
+
+def label_unit_table(assembled_dir, site, table, label_col, unit_col, min_stays=10, top=80):
+    """Rows and stays for each pair of a label column (drug or variable name) and a unit column, pairs seen in fewer than `min_stays`
+    stays hidden. Shows which unit goes with which drug or variable. Labels and units only."""
+    base = Path(assembled_dir) / site
+    p = base / f"{table}.parquet" if site != "SMH" else SM._path(base, table)
+    stay = STAY.get(site, "encounterId")
+    df = pd.read_parquet(p, columns=SM._cols(p, (stay, label_col, unit_col)))
+    df.columns = ["stay", "label", "unit"]
+    df = df[_present(df["label"])]
+    df["unit"] = df["unit"].astype("string").fillna("(none)")
+    g = df.groupby(["label", "unit"])
+    res = pd.DataFrame({"rows": g.size(), "stays": g["stay"].nunique()}).sort_values("stays", ascending=False)
+    shown = res[res["stays"] >= min_stays].head(top)
+    print(f"{site} {table}: {len(res)} label and unit pairs; {len(shown)} shown (>= {min_stays} stays)")
+    print(shown.to_string())
+    return shown
+
+
+def gosh_unitless_check(assembled_dir, static, table=None, label_col="shortLabel", value_col="valueNumber", unit_col="unitOfMeasure",
+                        run_col="episodeId", min_stays=10, top=15):
+    """What the unitless rows of the GOSH continuous-infusion table look like. Counts, shares and ranges only (the most common values are
+    shown only where seen in at least `min_stays` stays). Returns a dict of small frames:
+    overview (rows, stays), values (most common unitless values by stays), per_run (how many different unitless values one infusion run
+    holds, per drug label), across_drugs (share of stays where every drug carries the same set of unitless values), per_hour (unitless rows
+    per stay, label and hour), static_match (share of unitless rows equal to the stay's age in months or weight in kg, within 0.5)."""
+    table = table or _CI
+    p = Path(assembled_dir) / "GOSH" / f"{table}.parquet"
+    nm = {n.lower(): n for n in pq.ParquetFile(p).schema.names}
+    tcol = time_column(p)
+    want = [c for c in ("stay_id", label_col, value_col, unit_col, run_col, tcol) if c and c.lower() in nm]
+    df = pd.read_parquet(p, columns=[nm[c.lower()] for c in dict.fromkeys(want)])
+    df.columns = [c.lower() for c in df.columns]
+    has_run = bool(run_col) and run_col.lower() in df.columns
+    u = df[unit_col.lower()].astype("string").str.strip()
+    df["val"] = pd.to_numeric(df[value_col.lower()], errors="coerce")
+    d = df[(u.isna() | (u == "")) & df["val"].notna()].copy()
+    d = d.rename(columns={"stay_id": "stay", label_col.lower(): "label"})
+    d["stay"] = d["stay"].astype(str)
+    out = {}
+    out["overview"] = pd.DataFrame({"rows_all": [len(df)], "rows_unitless": [len(d)], "stays_unitless": [d["stay"].nunique()],
+                                    "has_run_column": [has_run]})
+    g = d.groupby("val")
+    v = pd.DataFrame({"rows": g.size(), "stays": g["stay"].nunique()})
+    out["values"] = v[v["stays"] >= min_stays].sort_values("stays", ascending=False).head(top)
+    keys = ["stay", "label"] + ([run_col.lower()] if has_run else [])
+    nun = d.groupby(keys)["val"].nunique()
+    out["per_run"] = nun.value_counts().sort_index().rename("runs").to_frame()
+    out["per_run"].index.name = "distinct_unitless_values_in_run"
+    sets = d.groupby(["stay", "label"])["val"].agg(lambda s: tuple(sorted(set(s)))).reset_index()
+    ns = sets.groupby("stay")["val"].agg(lambda s: s.nunique())
+    multi = sets.groupby("stay")["label"].nunique() > 1
+    out["across_drugs"] = pd.DataFrame({"stays_with_2plus_drugs": [int(multi.sum())],
+                                        "share_identical_across_drugs": [float((ns[multi] == 1).mean()) if multi.any() else np.nan]})
+    if tcol and tcol.lower() in d.columns:
+        h = pd.to_datetime(d[tcol.lower()], errors="coerce", utc=True).dt.floor("h")
+        per = d.assign(h=h).groupby(["stay", "label", "h"]).size()
+        out["per_hour"] = per.describe(percentiles=[.5, .95]).round(2).to_frame("unitless_rows_per_stay_label_hour")
+    st = static[static["site"] == "GOSH"][["stay_key", "age_months", "weight_kg"]].copy()
+    st["stay_key"] = st["stay_key"].astype(str)
+    m = d.merge(st, left_on="stay", right_on="stay_key", how="inner")
+    out["static_match"] = pd.DataFrame({"rows_checked": [len(m)],
+                                        "share_equal_age_months": [float(((m["val"] - m["age_months"]).abs() <= 0.5).mean())],
+                                        "share_equal_weight_kg": [float(((m["val"] - m["weight_kg"]).abs() <= 0.5).mean())]})
+    for k, f in out.items():
+        print(f"--- {k}")
+        print(f.to_string())
+    return out
+
+
+def gosh_unitless_by_drug(assembled_dir, table=None, label_col="shortLabel", value_col="valueNumber", unit_col="unitOfMeasure",
+                          common=2.0, min_stays=10, top=30):
+    """For each drug label of the GOSH infusion table, the unitless value that is not the constant `common` (the value found in every stay):
+    how many distinct such values the drug has, the share of its rows carrying the most common one, and rows and stays. A share near 1 means a
+    code or setting tied to the drug; a low share means it varies by infusion or patient. Drug labels seen in fewer than `min_stays` stays are
+    hidden, and the values themselves are not shown."""
+    table = table or _CI
+    p = Path(assembled_dir) / "GOSH" / f"{table}.parquet"
+    nm = {n.lower(): n for n in pq.ParquetFile(p).schema.names}
+    want = ["stay_id", label_col, value_col, unit_col]
+    df = pd.read_parquet(p, columns=[nm[c.lower()] for c in want])
+    df.columns = ["stay", "label", "val", "unit"]
+    u = df["unit"].astype("string").str.strip()
+    df["val"] = pd.to_numeric(df["val"], errors="coerce")
+    d = df[(u.isna() | (u == "")) & df["val"].notna() & (df["val"] != common)]
+    rows = []
+    for lab, g in d.groupby("label"):
+        vc = g["val"].value_counts()
+        rows.append({"label": lab, "rows": len(g), "stays": g["stay"].nunique(), "distinct_values": len(vc),
+                     "share_top_value": round(float(vc.iloc[0] / len(g)), 3)})
+    res = pd.DataFrame(rows)
+    res = res[res["stays"] >= min_stays].sort_values("stays", ascending=False).head(top)
+    print(res.to_string(index=False))
+    return res
