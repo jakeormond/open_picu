@@ -435,3 +435,100 @@ def site_inference(X, site, cv=5, drop_one=True, seed=0, groups=None):
     if drop_one:
         out["accuracy_without"] = pd.Series({c: round(acc([k for k in X.columns if k != c])[0], 4) for c in X.columns}).sort_values()
     return out
+
+
+def plot_site_inference(res_all, res_without, without_label="diagnosis group", path=None):
+    """Two panels for presenting the site-inference test. Left: accuracy of guessing the site from all columns, and with each column left out in
+    turn (`res_all`, from `site_inference` with drop_one=True), against the baseline of always guessing the largest site; the column named
+    `without_label` is highlighted. Right: recall for each site with all columns and without that column (`res_without`, its recall_by_site)."""
+    import matplotlib.pyplot as plt
+    base = res_all["baseline"] * 100
+    acc = res_all["accuracy_without"] * 100
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 4), gridspec_kw={"width_ratios": [1.3, 1]})
+    _ax(a1)
+    a1.grid(axis="x", color=GRID, linewidth=0.8)
+    a1.grid(axis="y", visible=False)
+    names = ["All columns"] + [f"Without {c.replace('_', ' ')}" for c in acc.index]
+    vals = [res_all["accuracy"] * 100] + list(acc.values)
+    cols = [CAT[0]] + [CAT[1] if c.replace("_", " ") == without_label else CAT[0] for c in acc.index]
+    order = np.argsort(vals)[::-1]
+    names, vals, cols = [names[i] for i in order], [vals[i] for i in order], [cols[i] for i in order]
+    a1.barh(names, vals, color=cols, height=0.6)
+    for y, v in enumerate(vals):
+        a1.text(v + 0.6, y, f"{v:.1f}%", va="center", color=INK2, fontsize=9)
+    a1.axvline(base, color=INK, linewidth=1.5, linestyle="--", label=f"always guess the largest site ({base:.1f}%)")
+    a1.legend(frameon=False, labelcolor=INK2, fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.17))
+    a1.invert_yaxis()
+    a1.set_xlim(0, 100)
+    a1.set_xlabel("stays whose site is guessed correctly (%)", color=INK2)
+    a1.set_title("How well the site can be guessed from the static fields", color=INK, loc="left", fontsize=11)
+    _ax(a2)
+    sites = [s for s in ("GOSH", "RBH", "SMH") if s in res_all["recall_by_site"].index]
+    x = np.arange(len(sites))
+    a2.bar(x - 0.2, res_all["recall_by_site"].reindex(sites) * 100, width=0.38, color=CAT[0], label="all columns")
+    a2.bar(x + 0.2, res_without["recall_by_site"].reindex(sites) * 100, width=0.38, color=CAT[1], label=f"without {without_label}")
+    a2.set_xticks(x)
+    a2.set_xticklabels(sites)
+    a2.set_ylim(0, 100)
+    a2.set_ylabel("stays of the site guessed correctly (%)", color=INK2)
+    a2.legend(frameon=False, labelcolor=INK2, fontsize=9)
+    a2.set_title("Recall by site", color=INK, loc="left", fontsize=11)
+    return _save(fig, path)
+
+
+def plot_site_variants(res, title="How well the site can be guessed from which concepts a stay has", path=None):
+    """Compare several `site_inference` results (a dict of name -> result, for example the availability table with progressively fewer
+    concepts). Left: accuracy per variant against the baseline of always guessing the largest site. Right: recall by site for each variant."""
+    import matplotlib.pyplot as plt
+    names = list(res)
+    base = next(iter(res.values()))["baseline"] * 100
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 3.8), gridspec_kw={"width_ratios": [1.2, 1]})
+    _ax(a1)
+    a1.grid(axis="x", color=GRID, linewidth=0.8)
+    a1.grid(axis="y", visible=False)
+    acc = [res[n]["accuracy"] * 100 for n in names]
+    a1.barh(names, acc, color=CAT[0], height=0.55)
+    for y, v in enumerate(acc):
+        a1.text(v + 0.8, y, f"{v:.1f}%", va="center", color=INK2, fontsize=9)
+    a1.axvline(base, color=INK, linewidth=1.5, linestyle="--", label=f"always guess the largest site ({base:.1f}%)")
+    a1.legend(frameon=False, labelcolor=INK2, fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.17))
+    a1.invert_yaxis()
+    a1.set_xlim(0, 110)
+    a1.set_xlabel("stays whose site is guessed correctly (%)", color=INK2)
+    a1.set_title(title, color=INK, loc="left", fontsize=11)
+    _ax(a2)
+    sites = [s for s in ("GOSH", "RBH", "SMH") if s in next(iter(res.values()))["recall_by_site"].index]
+    w = 0.8 / len(names)
+    for i, n in enumerate(names):
+        a2.bar(np.arange(len(sites)) + i * w - 0.4 + w / 2, res[n]["recall_by_site"].reindex(sites) * 100, width=w * 0.92, color=CAT[i % len(CAT)], label=n)
+    a2.set_xticks(range(len(sites)))
+    a2.set_xticklabels(sites)
+    a2.set_ylim(0, 100)
+    a2.set_ylabel("stays of the site guessed correctly (%)", color=INK2)
+    a2.legend(frameon=False, labelcolor=INK2, fontsize=8, loc="lower center", bbox_to_anchor=(0.5, -0.42), ncol=1)
+    a2.set_title("Recall by site", color=INK, loc="left", fontsize=11)
+    return _save(fig, path)
+
+
+def plot_group_drop(acc, baseline, reference="none removed", title="Which concept group gives the site away?", path=None):
+    """Accuracy of guessing the site from the shared concepts' availability with one concept group removed at a time (a Series of accuracies in
+    0 to 1, with the entry `reference` for nothing removed), against the baseline of always guessing the largest site. The label of each bar
+    shows the accuracy and the change from the reference."""
+    import matplotlib.pyplot as plt
+    a = acc.sort_values() * 100
+    ref = acc[reference] * 100
+    fig, ax = plt.subplots(figsize=(8, 3.8))
+    _ax(ax)
+    ax.grid(axis="x", color=GRID, linewidth=0.8)
+    ax.grid(axis="y", visible=False)
+    cols = [INK2 if n == reference else CAT[0] for n in a.index]
+    ax.barh(list(a.index), a.values, color=cols, height=0.55)
+    for y, (n, v) in enumerate(a.items()):
+        txt = f"{v:.1f}%" if n == reference else f"{v:.1f}%  ({v - ref:+.1f} points)"
+        ax.text(v + 0.8, y, txt, va="center", color=INK2, fontsize=9)
+    ax.axvline(baseline * 100, color=INK, linewidth=1.5, linestyle="--", label=f"always guess the largest site ({baseline * 100:.1f}%)")
+    ax.legend(frameon=False, labelcolor=INK2, fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.17))
+    ax.set_xlim(0, 112)
+    ax.set_xlabel("stays whose site is guessed correctly (%)", color=INK2)
+    ax.set_title(title, color=INK, loc="left", fontsize=11)
+    return _save(fig, path)

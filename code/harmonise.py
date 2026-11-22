@@ -363,7 +363,7 @@ def time_alignment_check(assembled_dir, static, concept="hr", sites=C.SITES):
 
 # ====================================================================================================================================
 # Fluids: hourly ml (value = the hourly amount recorded at `hour`; which end of the hour each source's time marks is not documented), long format.
-#   intake_total   RBH Total_In_ex_dialysis (as recorded); SMH io 'Total In 24hr' hourTotal; GOSH differenced Total_fluids (pre-Epic)
+#   intake_total   RBH Total_In_ex_dialysis (as recorded); SMH io fluidIn hourTotal (an hourly amount, checked with fluid_definition_check); GOSH differenced Total_fluids (pre-Epic)
 #                  and caboodle hourly_intake_ml (Epic era)
 #   intake_iv      IV infusion + colloids + drug volume, without blood products, enteral or TPN. RBH IV_Infusion + IV_Meds + Colloids;
 #                  SMH ids 1851 + 2047 + 2101 (hourTotal); not at GOSH (totals only). May under-count at RBH up to about 2016 (R6).
@@ -516,6 +516,70 @@ def harmonise_fluids(assembled_dir, static, out_dir, percentile=99.9, sites=C.SI
         df.insert(0, "site", site)
         df.to_parquet(out_dir / f"{site}_fluids.parquet", index=False)
     return pd.DataFrame(rows), pd.DataFrame(caps)
+
+
+FLUID_CONCEPTS = ("intake_total", "intake_iv", "output_total", "urine_output", "net_balance")
+
+
+def fluid_definition_check(harmonised_dir, static, sites=C.SITES):
+    """Do the fluid concepts mean the same thing at each site? Reads {site}_fluids.parquet and returns two tables (counts and summaries only).
+
+    profile, per site, concept and source:
+      stays, rows; rows_per_hour (median over stays of rows / hours from first to last row: about 1 for an hourly record, well below 1 for
+      totals recorded a few times a day); pct_zero; median_nonzero and p95_nonzero (ml); median_nonzero_per_kg (ml per kg per row);
+      rows_per_day and median_day_per_kg (median over stay-days of the summed values per kg, which for a true hourly amount is the daily volume,
+      a few tens to about 150 ml/kg for intake in children, and far too large for a 24 h total repeated hourly); pct_nondecreasing (share of
+      consecutive hourly pairs of non-zero values where the value does not fall: about 50% for hourly amounts, near 100% for a running total).
+    identities, per site and source: how often the concepts agree where they are recorded in the same hour:
+      net_equals_in_minus_out (|net - (intake - output)| <= 1 ml), iv_le_total (intake_iv <= intake_total), urine_le_output (urine_output <=
+      output_total), each with the number of hours compared.
+    A source whose median_day_per_kg is about 24 times another's, or whose pct_nondecreasing is near 100%, holds running or 24 h totals and
+    needs differencing; two sources of one concept that disagree in median_day_per_kg are not one series."""
+    harmonised_dir = Path(harmonised_dir)
+    w = static.assign(stay_key=static["stay_key"].astype(str)).set_index(["site", "stay_key"])["weight_kg"].astype("float64")
+    prof, ident = [], []
+    for site in sites:
+        f = harmonised_dir / f"{site}_fluids.parquet"
+        if not f.exists():
+            continue
+        d = pd.read_parquet(f, columns=["stay_key", "concept", "hour", "value", "source"])
+        d = d[d["value"].notna() & d["concept"].isin(FLUID_CONCEPTS)].copy()
+        d["stay_key"] = d["stay_key"].astype(str)
+        d["hour"] = d["hour"].astype("float64")
+        d["value"] = d["value"].astype("float64")
+        wt = pd.Series(list(zip([site] * len(d), d["stay_key"])), index=d.index).map(w)
+        d["kg"] = wt.where(wt > 0)
+        d["day"] = np.floor(d["hour"] / 24)
+        for (c, src), g in d.groupby(["concept", "source"]):
+            g = g.sort_values(["stay_key", "hour"])
+            per = g.groupby("stay_key")["hour"].agg(n="size", span=lambda x: x.max() - x.min() + 1)
+            nz = g[g["value"] != 0]
+            pair = g.groupby("stay_key")[["hour", "value"]].diff()
+            both = (pair["hour"] > 0) & (pair["hour"] <= 1.5) & (g["value"] != 0) & (g.groupby("stay_key")["value"].shift(1) != 0)
+            day = g.groupby(["stay_key", "day"]).agg(total=("value", "sum"), n=("value", "size"), kg=("kg", "first"))
+            prof.append({"site": site, "concept": c, "source": src, "stays": int(g["stay_key"].nunique()), "rows": len(g),
+                         "rows_per_hour": round(float((per["n"] / per["span"]).clip(upper=1).median()), 3),
+                         "pct_zero": round(100 * float((g["value"] == 0).mean()), 1),
+                         "median_nonzero": round(float(nz["value"].median()), 1) if len(nz) else np.nan,
+                         "p95_nonzero": round(float(nz["value"].quantile(.95)), 1) if len(nz) else np.nan,
+                         "median_nonzero_per_kg": round(float((nz["value"] / nz["kg"]).median()), 2) if nz["kg"].notna().any() else np.nan,
+                         "rows_per_day": round(float(day["n"].median()), 1),
+                         "median_day_per_kg": round(float((day["total"] / day["kg"]).median()), 1) if day["kg"].notna().any() else np.nan,
+                         "pct_nondecreasing": round(100 * float((g["value"] >= g.groupby("stay_key")["value"].shift(1))[both].mean()), 1) if both.sum() else np.nan})
+        for src, g in d.groupby("source"):
+            wide = g.pivot_table(index=["stay_key", "hour"], columns="concept", values="value", aggfunc="first")
+            row = {"site": site, "source": src}
+            for name, cols, test in (("net_equals_in_minus_out", ("net_balance", "intake_total", "output_total"),
+                                      lambda x: (x["net_balance"] - (x["intake_total"] - x["output_total"])).abs() <= 1),
+                                     ("iv_le_total", ("intake_iv", "intake_total"), lambda x: x["intake_iv"] <= x["intake_total"] + 1e-6),
+                                     ("urine_le_output", ("urine_output", "output_total"), lambda x: x["urine_output"] <= x["output_total"] + 1e-6)):
+                if all(c in wide for c in cols):
+                    x = wide[list(cols)].dropna()
+                    row[name] = round(100 * float(test(x).mean()), 1) if len(x) else np.nan
+                    row[name + "_hours"] = len(x)
+            if len(row) > 2:
+                ident.append(row)
+    return pd.DataFrame(prof), pd.DataFrame(ident)
 
 
 def window_check(harmonised_dir, static, sites=C.SITES, assembled_dir=None):
@@ -938,3 +1002,59 @@ def drug_unit_lookup(harmonised_dir, sites=C.SITES, min_stays=10):
             rows.append({"site": site, "unit": r["unit"], "rows": r["rows"], "stays": r["stays"], "kind": r["kind"],
                          "amount_unit": amt, "per_kg": perkg if amt else None, "time_unit": tm, "base_unit": base, "factor": fac})
     return pd.DataFrame(rows)
+
+
+def pair_check(harmonised_dir, site, a, b, tol=None, min_stays=10):
+    """Are two concepts at one site the same measurement? Pairs the hourly values of `a` and `b` by stay and hour (mean within the hour) and
+    reports, as counts and summary statistics only: pairs, stays, correlation, the median, 5th and 95th percentile of a - b, and the share of
+    pairs within `tol` of each other (tol=None: not reported). Stays with fewer than `min_stays`... are not hidden individually; only the totals
+    are shown. If a and b are nearly equal, one of them is redundant and can be dropped."""
+    d = Path(harmonised_dir)
+    frames = []
+    for f in sorted(d.glob(f"{site}_*.parquet")):
+        if f.stem.endswith(("_rejected", "_drugs")):
+            continue
+        t = pd.read_parquet(f, columns=["stay_key", "concept", "hour", "value"], filters=[("concept", "in", [a, b])])
+        if len(t):
+            frames.append(t)
+    if not frames:
+        return pd.DataFrame()
+    t = pd.concat(frames)
+    t["h"] = np.floor(t["hour"].astype("float64"))
+    w = t.groupby(["stay_key", "h", "concept"])["value"].mean().unstack("concept").dropna(subset=[a, b])
+    if len(w) == 0:
+        return pd.DataFrame([{"site": site, "pairs": 0}])
+    diff = w[a] - w[b]
+    out = {"site": site, "a": a, "b": b, "pairs": len(w), "stays": w.index.get_level_values("stay_key").nunique(),
+           "corr": round(float(w[a].corr(w[b])), 4), "median_diff": round(float(diff.median()), 4),
+           "p5_diff": round(float(diff.quantile(.05)), 4), "p95_diff": round(float(diff.quantile(.95)), 4)}
+    if tol is not None:
+        out[f"share_within_{tol}"] = round(float((diff.abs() <= tol).mean()), 4)
+    return pd.DataFrame([out])
+
+
+def availability_released(harmonised_dir, static, sites=C.SITES):
+    """Stay x concept table of booleans computed from the harmonised files (what a user of the release would see): does the stay have at least one
+    row of the concept? <NA> means the site has no source for the concept (not collected), False means collected but absent for the stay. Non-drug
+    concepts only; one row per stay of the static table (index site, stay_key). Unlike `concepts.availability` it uses the harmonised data, so
+    the window rule, the unit filters and the rejected rows are already applied."""
+    names = [n for n in C.CONCEPTS if C.CONCEPTS[n]["group"] != "drugs"]
+    parts = []
+    for site in sites:
+        keys = static.loc[static["site"] == site, "stay_key"].astype(str).tolist()
+        have = {}
+        for f in sorted(Path(harmonised_dir).glob(f"{site}_*.parquet")):
+            if f.stem.endswith(("_rejected", "_drugs")):
+                continue
+            t = pd.read_parquet(f, columns=["stay_key", "concept"]).drop_duplicates()
+            for c, g in t.groupby("concept"):
+                have.setdefault(c, set()).update(g["stay_key"].astype(str))
+        df = pd.DataFrame(index=pd.MultiIndex.from_product([[site], keys], names=["site", "stay_key"]))
+        for n in names:
+            if not C.CONCEPTS[n][site]:
+                df[n] = pd.array([pd.NA] * len(keys), dtype="boolean")
+            else:
+                s = have.get(n, set())
+                df[n] = pd.array([k in s for k in keys], dtype="boolean")
+        parts.append(df)
+    return pd.concat(parts)

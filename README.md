@@ -6,7 +6,7 @@ Working folder for the London PICU datasets (RBH, SMH, GOSH) of the SPRIND "Reco
 
 ```
 open_picu/
-  README.md, PIPELINE.md, ASSEMBLY.md, anonymisation_design.md
+  README.md, PIPELINE.md, ASSEMBLY.md, anonymisation_design.md, ANONYMISATION.md
   RBH_findings.md, SMH_findings.md, GOSH_findings.md     (counts and ranges only)
   code/                  shared modules; functions live here, not in notebooks
     inventory.py         profile every CSV in a site folder; date and identifier audits; report writer
@@ -17,14 +17,20 @@ open_picu/
     static.py            one row per stay, one schema across sites; pooled static table
     smh_mappings.py      SMH interventionId / attributeId / materialId mappings and the extraction SQL record
     harmonise.py         cohort rule, one clock (hours since t0), units and cleaning rules; long tables per site and concept group
-    concepts.py          cross-site concept map (103 concepts incl. 24 drugs): which measurements exist at all three sites, ranges, coverage by year, availability patterns
+    concepts.py          cross-site concept map (106 concepts incl. 24 drugs): which measurements exist at all three sites, ranges, coverage by year, availability patterns
+    reid.py              re-identification review: uniqueness, coarsening, local suppression, site inference, figures
+    anonymise.py         step 10: config-driven levels (Tier 1, Tier 2, ablations), keys, allow-lists, automated checks
+    level_report.py      per-level privacy report on the written files: small cells and site inference (static fields, concepts, drugs)
+    test_anonymise.py    synthetic-data tests for anonymise.py and level_report.py (run after every change)
   notebooks/             one notebook per analysis step
-    rbh_inventory, smh_inventory, gosh_inventory, manifest, assemble (also builds the static tables), concepts, concepts_checks
+    rbh_inventory, smh_inventory, gosh_inventory, manifest, assemble (also builds the static tables), concepts, concepts_checks, harmonise, reid_review, anonymise, level_report
   reports/               aggregate counts only; git-ignored, regenerated
   derived/               row-level (and some aggregate) outputs; never leaves the SDE; git-ignored
     assembled/<SITE>/    assembled tables (text-typed parquet)
     static/              <SITE>_static.parquet and pooled_static.parquet
     concepts/            concept_summary.csv, concept_detail.csv (counts and ranges)
+    harmonised/          long tables per site and concept group; drugs; rejected rows
+    anonymised/<level>/  releasable tables for one level (static, series, drugs, config, checks); anonymised/_private/ holds the key maps (never released)
     manifests, inventory pickle
 ```
 

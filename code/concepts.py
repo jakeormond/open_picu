@@ -135,13 +135,13 @@ CONCEPTS = {
     "fibrinogen": _c("lab", [("coagulation", "Fibrinogen")], [("labs", "fibrinogen")], [(_L + "Fibrinogen_merged", GV)]),
     # RBH-only laboratory columns (biochemistry): CRP, PCT, AST, ALP, GGT, Amylase, CK, Troponin_T, Troponin_I, BNP, Iron, Ferritin,
     # TIBC, Transferrin, Free_T4, Tot_CO2; (FBC) MonoC, Eosinoph, Basoph, RBC, MCV, MCH, MCHC, PCV; (coagulation) PT, Hep_Conc, D_Dimer, LDH.
-    # ---- fluids (semantics differ: hourly, 24 h totals and cumulative; handle when harmonising) ----
-    "urine_output": _c("fluids", [("io", "Urine_Output")], [("io", "urineOutput")], note="SMH io has 24 h totals; GOSH has no separate urine output (only totals)"),
+    # ---- fluids (hourly amounts at RBH, SMH and the GOSH Epic-era table; GOSH Total_fluids and Net_Bal are running totals, differenced when harmonising) ----
+    "urine_output": _c("fluids", [("io", "Urine_Output")], [("io", "urineOutput")], note="SMH io hourTotal is an hourly amount (fluid_definition_check, 2026-11-22: 24 rows per stay-day, about half of consecutive values fall); GOSH has no separate urine output (only totals)"),
     "intake_total": _c("fluids", [("io", "TOTAL_IN"), ("io", "Total_In_ex_dialysis")], [("io", "fluidIn")],
                        [(_BAL + "Total_fluids", "cumTotal", "shortLabel", ["Total Fluids In (24hrs)"]),
                         ("July2026extraction_by_alex__pAIC__merged_balance__caboodle_fluid_balance", "hourly_intake_ml")],
                        note="RBH TOTAL_IN and TOTAL_OUT are empty columns (checked 2026-11-18): the ex-dialysis totals are the source, so dialysis fluid is not counted; "
-                            "RBH and GOSH caboodle hourly; SMH and GOSH Total_fluids are 24 h totals"),
+                            "RBH, SMH and GOSH caboodle are hourly amounts (SMH hourTotal checked 2026-11-22); GOSH Total_fluids is a 24 h running total, differenced"),
     "output_total": _c("fluids", [("io", "TOTAL_OUT"), ("io", "Total_Out_ex_dialysis")], [("io", "fluidOut")],
                        [(_BAL + "Total_fluids", "cumTotal", "shortLabel", ["Total Fluids Out (24hrs)"]),
                         ("July2026extraction_by_alex__pAIC__merged_balance__caboodle_fluid_balance", "hourly_output_ml")]),
@@ -1158,9 +1158,11 @@ def gosh_unitless_check(assembled_dir, static, table=None, label_col="shortLabel
     st = static[static["site"] == "GOSH"][["stay_key", "age_months", "weight_kg"]].copy()
     st["stay_key"] = st["stay_key"].astype(str)
     m = d.merge(st, left_on="stay", right_on="stay_key", how="inner")
-    out["static_match"] = pd.DataFrame({"rows_checked": [len(m)],
-                                        "share_equal_age_months": [float(((m["val"] - m["age_months"]).abs() <= 0.5).mean())],
-                                        "share_equal_weight_kg": [float(((m["val"] - m["weight_kg"]).abs() <= 0.5).mean())]})
+    val = pd.to_numeric(m["val"], errors="coerce").to_numpy(dtype="float64")
+    share = lambda col: (lambda ok: float(ok.mean()) if len(ok) else np.nan)(
+        (np.abs(val - pd.to_numeric(m[col], errors="coerce").to_numpy(dtype="float64")) <= 0.5)[~np.isnan(pd.to_numeric(m[col], errors="coerce").to_numpy(dtype="float64"))])
+    out["static_match"] = pd.DataFrame({"rows_checked": [len(m)], "share_equal_age_months": [share("age_months")],
+                                        "share_equal_weight_kg": [share("weight_kg")]})
     for k, f in out.items():
         print(f"--- {k}")
         print(f.to_string())
