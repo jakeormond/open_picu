@@ -582,6 +582,76 @@ def fluid_definition_check(harmonised_dir, static, sites=C.SITES):
     return pd.DataFrame(prof), pd.DataFrame(ident)
 
 
+EPIC_SWITCH = "2019-04-20"
+
+
+def gosh_era_comparison(harmonised_dir, static, cutoff=EPIC_SWITCH, min_stays=10, site="GOSH"):
+    """GOSH before and after the Epic switch (stays whose t0 is before / on or after `cutoff`, London local time), for every concept in the
+    harmonised files of the site (all groups, drugs included). Per concept:
+      n_pre, n_post          stays of each era in the cohort (same on every row)
+      stays_pre, stays_post  stays with at least one row of the concept
+      share_pre, share_post  those as shares of the era's stays; change_pts = post minus pre in percentage points
+      median_pre, median_post  median over stays of the per-stay mean value, and shift = (post - pre) / typical spread of the pre era
+                             (IQR / 1.349 of per-stay means), ks = Kolmogorov-Smirnov distance; only if both eras have at least min_stays stays
+      flag                   'absent after' (post share under a tenth of the pre share), 'thin after' (under half), 'new after' (pre share under
+                             half the post share), 'values differ' (|shift| above 1 or ks above 0.3), else blank. Only for concepts with at least
+                             20% of stays in the larger-share era.
+    Tells which concepts are missing, thin or different after the switch, before deciding whether to drop the era or single concepts.
+    Counts, shares and summary values only. Needs scipy."""
+    from scipy.stats import ks_2samp
+    harmonised_dir = Path(harmonised_dir)
+    co = cohort(static)
+    co = co[co["site"] == site]
+    era = pd.Series(np.where(co["t0"] >= pd.Timestamp(cutoff), "post", "pre"), index=co["stay_key"].astype(str).to_numpy())
+    n = era.value_counts()
+    parts = []
+    for f in sorted(harmonised_dir.glob(f"{site}_*.parquet")):
+        if f.stem.endswith("_rejected"):
+            continue
+        d = pd.read_parquet(f, columns=["stay_key", "concept", "value"])
+        d["stay_key"] = d["stay_key"].astype(str)
+        d = d[d["stay_key"].isin(era.index)]
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        parts.append(d.groupby(["concept", "stay_key"], observed=True)["value"].agg(m="mean", rows="size").reset_index())
+    if not parts:
+        return pd.DataFrame()
+    m = pd.concat(parts, ignore_index=True)
+    m["era"] = m["stay_key"].map(era)
+    rows = []
+    for c, g in m.groupby("concept", observed=True):
+        a, b = g[g["era"] == "pre"], g[g["era"] == "post"]
+        sp, sq = len(a) / n.get("pre", np.nan), len(b) / n.get("post", np.nan)
+        row = {"concept": c, "stays_pre": len(a), "stays_post": len(b), "share_pre": round(sp, 3), "share_post": round(sq, 3),
+               "change_pts": round(100 * (sq - sp), 1)}
+        va, vb = a["m"].dropna().to_numpy(), b["m"].dropna().to_numpy()
+        flag = ""
+        if len(va) >= min_stays and len(vb) >= min_stays:
+            spread = (np.percentile(va, 75) - np.percentile(va, 25)) / 1.349
+            shift = (np.median(vb) - np.median(va)) / spread if spread > 0 else (np.inf if np.median(vb) != np.median(va) else 0.0)
+            ks = float(ks_2samp(va, vb).statistic)
+            row.update({"median_pre": round(float(np.median(va)), 3), "median_post": round(float(np.median(vb)), 3),
+                        "shift": round(float(shift), 2), "ks": round(ks, 3)})
+            if abs(shift) > 1 or ks > 0.3:
+                flag = "values differ"
+        if max(sp, sq) >= 0.2:
+            if sq < 0.1 * sp:
+                flag = "absent after"
+            elif sq < 0.5 * sp:
+                flag = "thin after"
+            elif sp < 0.5 * sq:
+                flag = "new after"
+        elif flag:
+            flag = ""
+        row["flag"] = flag
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    out["_o"] = out["flag"].map({"absent after": 0, "thin after": 1, "new after": 2, "values differ": 3, "": 4})
+    out = out.sort_values(["_o", "change_pts"]).drop(columns="_o").reset_index(drop=True)
+    out.insert(1, "n_pre", int(n.get("pre", 0)))
+    out.insert(2, "n_post", int(n.get("post", 0)))
+    return out
+
+
 def window_check(harmonised_dir, static, sites=C.SITES, assembled_dir=None):
     """Do harmonised rows lie inside the stay? For every harmonised file (all groups, fluids included), per site and concept: the rows, and
     the percent of rows more than 24 h before t0, from 24 h before up to t0, inside the stay (t0 to its length) and after the end of the stay.

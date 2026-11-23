@@ -181,7 +181,7 @@ def test_level_report():
     assert list(cs["k"]) == [5, 10, 20] and cs.attrs["stays"] == len(A.cohort_static(static))
     res = LR.site_report(tmp / "out", "tier2", static)
     tab = LR.summary(res)
-    assert len(tab) == 4 and {"accuracy", "baseline", "gain_pts", "recall_GOSH"} <= set(tab.columns)
+    assert len(tab) == 4 and {"accuracy", "baseline", "gain_pts", "balanced_acc", "recall_GOSH"} <= set(tab.columns)
     assert (tab["accuracy"] < 0.6).all()          # the synthetic sites are identical in structure, so the site cannot be guessed well
     r1 = LR.cached_site_report(tmp / "out", "tier2", static)
     assert (tmp / "out" / "_private" / "site_report_tier2_drugs1_seed0.pkl").exists()
@@ -264,6 +264,51 @@ def test_caboodle_and_source_labels():
     # explicit alternative: no source column at all
     tmp, static, steps, checks = run_level(A.preset("tier2", name="tier2_nosrc", drop_gosh_caboodle=False, source_mode="none", seed=10, max_small_share=None))
     assert (checks["status"] == "pass").all()
+
+
+def test_gosh_era_comparison():
+    try:
+        import scipy  # noqa: F401
+    except ImportError:
+        return
+    import tempfile, harmonise as H
+    rng = np.random.default_rng(2)
+    root = Path(tempfile.mkdtemp())
+    n = 200
+    t0 = list(pd.date_range("2018-01-01", periods=n // 2, freq="D")) + list(pd.date_range("2019-06-01", periods=n // 2, freq="D"))
+    static = pd.DataFrame({"site": "GOSH", "stay_key": [str(i) for i in range(n)], "t0": t0, "los_hours": 100.0})
+    rows = []
+    for i in range(n):
+        post = i >= n // 2
+        rows.append((str(i), "stable", 0.0, rng.normal(50, 5)))
+        if not post:
+            rows.append((str(i), "gone", 0.0, rng.normal(10, 1)))
+        else:
+            rows.append((str(i), "new", 0.0, rng.normal(10, 1)))
+        rows.append((str(i), "shifted", 0.0, rng.normal(20 if not post else 40, 2)))
+        if i % 2 == 0 or not post:
+            rows.append((str(i), "thin", 0.0, rng.normal(5, 1)))
+    pd.DataFrame(rows, columns=["stay_key", "concept", "hour", "value"]).to_parquet(root / "GOSH_vitals.parquet")
+    out = H.gosh_era_comparison(root, static).set_index("concept")
+    assert out.loc["gone", "flag"] == "absent after" and out.loc["new", "flag"] == "new after"
+    assert out.loc["thin", "flag"] == "thin after" or out.loc["thin", "flag"] == ""        # 50% of post stays: borderline, not asserted
+    assert out.loc["shifted", "flag"] == "values differ" and out.loc["stable", "flag"] == ""
+    assert out.loc["stable", "n_pre"] == 100 and out.loc["stable", "n_post"] == 100
+
+
+def test_gosh_epic_cutoff():
+    tmp, static, steps, checks = run_level(A.preset("tier2", name="t2_pre", gosh_epic_cutoff="2018-07-01", max_small_share=None, seed=12))
+    assert (checks["status"] == "pass").all()
+    left = steps[(steps["step"] == "cohort") & steps["item"].str.contains("GOSH stays left out")]["n"].iloc[0]
+    g = static[static["site"] == "GOSH"]
+    assert left == int((g["t0"] >= pd.Timestamp("2018-07-01")).sum()) and left > 0
+    st = pd.read_parquet(tmp / "out" / "t2_pre" / "static.parquet")
+    assert len(st) == len(A.cohort_static(static)) - left
+    try:
+        A.preset("tier2", gosh_epic_cutoff="not a date")
+    except ValueError:
+        return
+    raise AssertionError("bad cutoff accepted")
 
 
 def test_drop_static_fields():

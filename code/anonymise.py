@@ -84,6 +84,9 @@ class Config:
     drop_gosh_caboodle     drop the GOSH fluid rows from the Epic-era hourly table (source `gosh_caboodle`): its intake is about a sixth of the other
                            sources' daily volume per kg and its net balance is negative (DATA_ISSUES G16). Also makes `source` single-valued for the
                            fluid concepts, so it is blanked at Tier 2, where the source names (rbh_io, smh_io, gosh_*) would give the site away.
+    gosh_epic_cutoff       None, or a date ("2019-04-20"): GOSH stays whose t0 is on or after it are left out of the level altogether (static, series,
+                           drugs, key map). GOSH moved to Epic at that date and the later stays lack blood gas, ventilator mode, tidal volume, I:E
+                           ratio and diastolic pressures, and have the incomplete caboodle fluids (FLUIDS.md; `harmonise.gosh_era_comparison`).
     max_small_share        Tier 2 static check: largest accepted share of stays in cells below k (None: report only)."""
     name: str = "tier1"
     k: int = 10
@@ -111,6 +114,7 @@ class Config:
     raw_max_len: int = 40
     drop_gosh_unitless: bool = False
     drop_gosh_caboodle: bool = False
+    gosh_epic_cutoff: object = None
     max_small_share: float | None = None
 
     def validate(self):
@@ -119,6 +123,11 @@ class Config:
             bad.append("static_mode must be 'exact' or 'coarse'")
         if self.patient_key not in ("key", "split_group"):
             bad.append("patient_key must be 'key' or 'split_group'")
+        if self.gosh_epic_cutoff is not None:
+            try:
+                pd.Timestamp(self.gosh_epic_cutoff)
+            except (ValueError, TypeError):
+                bad.append("gosh_epic_cutoff must be None or a date such as '2019-04-20'")
         if self.source_mode not in ("all", "multi", "none"):
             bad.append("source_mode must be 'all', 'multi' or 'none'")
         if self.pim_mode not in ("raw", "band", "drop"):
@@ -584,10 +593,17 @@ def run(harmonised_dir, static, out_root, cfg, sites=SITES, reports_dir=None, ex
 
     co = cohort_static(static)
     co = co[co["site"].isin(sites)].reset_index(drop=True)
-    ids_all = source_ids(co, extra_ids)
+    ids_all = source_ids(co, extra_ids)                  # IDs of every cohort stay, also those the level leaves out
+    hour_limit = float(pd.to_numeric(co["los_hours"], errors="coerce").max()) + 48.0
+    n_epic = 0
+    if cfg.gosh_epic_cutoff:
+        m = (co["site"] == "GOSH") & (pd.to_datetime(co["t0"]) >= pd.Timestamp(cfg.gosh_epic_cutoff))
+        n_epic = int(m.sum())
+        co = co[~m].reset_index(drop=True)
     ids = testable_ids(ids_all)
     short_ids = frozenset(ids_all - ids)
-    hour_limit = float(pd.to_numeric(co["los_hours"], errors="coerce").max()) + 48.0
+    if cfg.gosh_epic_cutoff:
+        steps.append({"step": "cohort", "item": f"GOSH stays left out (t0 on or after {cfg.gosh_epic_cutoff})", "n": n_epic})
     steps.append({"step": "cohort", "item": "stays", "n": len(co)})
     steps.append({"step": "checks", "item": f"original IDs too short to test (under {MIN_ID_LEN} characters)", "n": len(ids_all) - len(ids)})
     km = make_keys(co, cfg, ids_all)

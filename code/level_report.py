@@ -114,12 +114,16 @@ def site_report(out_root, name, static, include_drugs=True, seed=0):
 
 
 def summary(res):
-    """One table: per variant the accuracy, the baseline, the gain over the baseline (percentage points) and the recall for each site."""
+    """One table: per variant the accuracy, the baseline, the gain over the baseline (percentage points), the balanced accuracy (mean of the
+    recall of each site; chance is 1 / number of sites whatever the site sizes, so levels with different site mixes can be compared) and the
+    recall for each site."""
     rows = []
     for label, r in res.items():
+        rec = {s: float(v) for s, v in r["recall_by_site"].items()}
         row = {"variant": label, "features": r["features"], "accuracy": r["accuracy"], "baseline": r["baseline"],
-               "gain_pts": round((r["accuracy"] - r["baseline"]) * 100, 1)}
-        row.update({f"recall_{s}": float(v) for s, v in r["recall_by_site"].items()})
+               "gain_pts": round((r["accuracy"] - r["baseline"]) * 100, 1),
+               "balanced_acc": round(float(np.mean(list(rec.values()))), 4)}
+        row.update({f"recall_{s}": v for s, v in rec.items()})
         rows.append(row)
     return pd.DataFrame(rows)
 
