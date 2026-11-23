@@ -187,6 +187,9 @@ def test_level_report():
     assert (tmp / "out" / "_private" / "site_report_tier2_drugs1_seed0.pkl").exists()
     r2 = LR.cached_site_report(tmp / "out", "tier2", static)     # second call loads the cache
     assert LR.summary(r1).equals(LR.summary(r2))
+    d1 = LR.drugs_only_report(tmp / "out", "tier2", static)
+    d2 = LR.drugs_only_report(tmp / "out", "tier2", static)
+    assert LR.summary(d1).equals(LR.summary(d2)) and LR.summary(d1)["variant"].iloc[0] == "drugs only"
     t, _ = LR.compare_levels(tmp / "out", ["tier2"], static)
     assert list(t["level"].unique()) == ["tier2"]
 

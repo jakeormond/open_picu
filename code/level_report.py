@@ -308,3 +308,27 @@ def compare_levels(out_root, names, static, **kw):
     res = {n: cached_site_report(out_root, n, static, **kw) for n in names}
     tab = pd.concat([summary(r).assign(level=n) for n, r in res.items()], ignore_index=True)
     return tab[["level"] + [c for c in tab.columns if c != "level"]], res
+
+
+def drugs_only_report(out_root, name, static, seed=0, refresh=False):
+    """Site inference from which drugs a stay has any rows of, and nothing else (`site_report` only has the drug columns together with static
+    fields and concepts). Same classifier, folds and cache rule as `cached_site_report`; the cache file is separate. Returns {"drugs only": result}
+    with the usual keys. Pair it with `single_concept_accuracy(out_root, name, drugs=True)`, which says which drugs give the site away."""
+    import pickle
+    p = Path(out_root) / "_private" / f"drugs_only_{name}_seed{seed}.pkl"
+    files = list(_level_dir(out_root, name).glob("*.parquet")) + [Path(out_root) / "_private" / f"{name}_key_map.parquet"]
+    if p.exists() and not refresh and p.stat().st_mtime >= max(f.stat().st_mtime for f in files):
+        print(f"{name}: drugs only loaded from cache")
+        with open(p, "rb") as fh:
+            return pickle.load(fh)
+    st = load_static(out_root, name)
+    stays = st["stay_key"].astype(str).tolist()
+    site, groups = labels(out_root, name, static, stays)
+    X = _presence(out_root, name, stays, drugs=True).add_prefix("drug_")
+    r = R.site_inference(X.reset_index(drop=True), site, drop_one=False, seed=seed, groups=groups)
+    r["stays"], r["features"] = len(X), X.shape[1]
+    res = {"drugs only": r}
+    with open(p, "wb") as fh:
+        pickle.dump(res, fh)
+    print(f"{name}: drugs only computed and saved")
+    return res
