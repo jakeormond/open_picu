@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from dataclasses import dataclass, field, asdict, replace
+from dataclasses import dataclass, field, asdict, replace, fields
 from pathlib import Path
 
 import numpy as np
@@ -76,6 +76,8 @@ class Config:
     drop_static            static fields left out of the level altogether: any of "ethnicity", "weight", "diagnosis_group" (with their source
                            columns). Age, sex and outcome are not optional. A dropped field is also left out of the small-cell checks and suppression.
     time_resolution_hours  None keeps `hour` as recorded; a number rounds it to that step (1.0 = whole hours).
+    one_row_per_hour       with time_resolution_hours: numeric (non-drug) rows of one stay, concept and source that land in the same time step are
+                           replaced by one row holding their median (value_raw of a merged row is blanked). Removes how often a site records.
     drop_concepts, rename_concepts   concepts removed or renamed in every table.
     text_rare_rule         strings of `value_text` seen in fewer than k stays at a site and concept become "rare".
     raw_max_len            the note scan flags text longer than this unless it is a common string (see `note_like`).
@@ -108,6 +110,7 @@ class Config:
     suppress_order: tuple = ("weight_band", "ethnicity", "diagnosis_group")
     drop_static: tuple = ()
     time_resolution_hours: float | None = None
+    one_row_per_hour: bool = False
     drop_concepts: tuple = ()
     rename_concepts: dict = field(default_factory=dict)
     text_rare_rule: bool = False
@@ -140,6 +143,8 @@ class Config:
             bad.append("exact mode uses patient_key='key'")
         if self.time_resolution_hours is not None and self.time_resolution_hours <= 0:
             bad.append("time_resolution_hours must be positive")
+        if self.one_row_per_hour and not self.time_resolution_hours:
+            bad.append("one_row_per_hour needs time_resolution_hours")
         if self.k < 2:
             bad.append("k must be at least 2")
         unknown = [f for f in self.drop_static if f not in DROPPABLE]
@@ -169,6 +174,20 @@ PRESETS = {"tier1": TIER1, "tier2": TIER2,
            "tier2_pim": replace(TIER2, name="tier2_pim", pim_mode="band", seed=3),
            "tier2_hourly": replace(TIER2, name="tier2_hourly", time_resolution_hours=1.0, seed=4),
            "tier2_no_ethnicity": replace(TIER2, name="tier2_no_ethnicity", drop_static=("ethnicity",), seed=6)}
+
+
+def config_from_level(out_root, level, /, **changes):
+    """The Config a released level was made with (read from its config.json), with `changes` applied and validated. Use it to make a variant of
+    a level exactly as it was made: config_from_level(out_root, "tier2_merge_drop3_pre_epic", name="x", time_resolution_hours=1.0, seed=16)."""
+    d = json.loads((Path(out_root) / level / "config.json").read_text())
+    kinds = {f.name: f.default for f in fields(Config)}
+    def dec(v):
+        if v == "inf":
+            return float("inf")
+        return tuple(dec(x) for x in v) if isinstance(v, list) else v
+    for k, v in list(d.items()):
+        d[k] = tuple(dec(x) for x in v) if isinstance(v, list) and isinstance(kinds.get(k), tuple) else dec(v)
+    return replace(Config(**{**d}), **changes).validate()
 
 
 def preset(base, /, **changes):
@@ -411,7 +430,7 @@ def transform_series(df, site, kind, keymap, cfg, multi):
     log = {"site": site, "kind": kind, "rows_in": len(df)}
     allowed = allowed_series(cfg, kind)
     log["columns_dropped"] = ",".join(c for c in df.columns if c not in allowed and c != "site")
-    log["drop_concept"] = log["drop_drug_rule"] = log["drop_caboodle"] = log["drop_not_cohort"] = log["time_rounded_rows"] = 0
+    log["drop_concept"] = log["drop_drug_rule"] = log["drop_caboodle"] = log["drop_not_cohort"] = log["time_rounded_rows"] = log["rows_merged_hourly"] = 0
     log["text_note_nulled"] = log["text_rare_mapped"] = log["raw_note_nulled"] = log["raw_rare_nulled"] = log["source_blanked"] = 0
 
     m = df["concept"].isin(cfg.drop_concepts)
@@ -466,6 +485,19 @@ def transform_series(df, site, kind, keymap, cfg, multi):
         m = ~df["concept"].isin(multi)
         log["source_blanked"] = int((m & df["source"].notna()).sum())
         df.loc[m, "source"] = pd.NA
+    if cfg.one_row_per_hour and cfg.time_resolution_hours and kind != "drugs":
+        num = df["value"].notna()
+        if "value_text" in df.columns:
+            num &= df["value_text"].isna()
+        keys = [c for c in ("stay_key", "concept", "hour", "source") if c in df.columns]
+        sub = df[num]
+        size = sub.groupby(keys, dropna=False)["value"].transform("size")
+        sub = sub.assign(value=sub.groupby(keys, dropna=False)["value"].transform("median"))
+        if "value_raw" in sub.columns:
+            sub.loc[size > 1, "value_raw"] = pd.NA
+        sub = sub.drop_duplicates(keys)
+        log["rows_merged_hourly"] = int(num.sum() - len(sub))
+        df = pd.concat([df[~num], sub]).sort_index()
     log["rows_out"] = len(df)
     return df, log
 
@@ -634,7 +666,7 @@ def run(harmonised_dir, static, out_root, cfg, sites=SITES, reports_dir=None, ex
             if not f.exists():
                 continue
             out, lg = transform_series(pd.read_parquet(f), site, kind, kmaps.get(site, {}), cfg, multi)
-            dropped = sum(lg[k] for k in ("drop_concept", "drop_drug_rule", "drop_caboodle", "drop_not_cohort"))
+            dropped = sum(lg[k] for k in ("drop_concept", "drop_drug_rule", "drop_caboodle", "drop_not_cohort", "rows_merged_hourly"))
             checks.append(_chk("rows", f"{site}_{g}", lg["rows_in"] - dropped - lg["rows_out"], lg["rows_in"] - dropped == lg["rows_out"],
                                f"in {lg['rows_in']}, dropped {dropped}, out {lg['rows_out']}"))
             if kind == "drugs" and site == "GOSH" and cfg.drop_gosh_unitless:

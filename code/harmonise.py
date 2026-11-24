@@ -1128,3 +1128,104 @@ def availability_released(harmonised_dir, static, sites=C.SITES):
                 df[n] = pd.array([k in s for k in keys], dtype="boolean")
         parts.append(df)
     return pd.concat(parts)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------
+# Are the units and scales the same across sites once age is taken into account?
+# ---------------------------------------------------------------------------------------------------------------------------------------
+AGE_BANDS = (("<1y", 0, 12), ("1-4y", 12, 60), ("5-11y", 60, 144), ("12y+", 144, 10_000))
+_UNIT_FACTORS = {"x10": 10.0, "x100": 100.0, "x1000": 1000.0, "x88.4 (creatinine mg/dL-umol/L)": 88.4, "x18 (glucose mg/dL-mmol/L)": 18.0}
+_KPA_CONCEPTS = ("bg_po2", "bg_pco2", "etco2")       # kPa against mmHg (x7.5) is only offered for these
+
+
+def _factor_hint(ratio, concept=""):
+    """Name of a common unit factor that `ratio` is within 7% of (either way round), else ''. Only factors of 10 or more are offered for any
+    concept (smaller ones match ordinary case-mix differences by chance); kPa against mmHg only for the gas concepts."""
+    if not np.isfinite(ratio) or ratio <= 0:
+        return ""
+    r = max(ratio, 1 / ratio)
+    factors = dict(_UNIT_FACTORS)
+    if concept in _KPA_CONCEPTS:
+        factors["x7.5 (kPa-mmHg)"] = 7.50062
+    for label, f in factors.items():
+        if abs(r / f - 1) < 0.07:
+            return label
+    return ""
+
+
+def _stay_medians(harmonised_dir, static, sites, concepts=None, drop_flags=("range", "outlier")):
+    """One row per site, stay and concept: the median of the numeric `value` over the stay, with the stay's age band. Rows flagged as range or
+    outlier are left out. Fluids are left out (running totals and flows are not a level)."""
+    st = static[["site", "stay_key", "age_months"]].copy()
+    st["stay_key"] = st["stay_key"].astype(str)
+    st["age_band"] = pd.cut(pd.to_numeric(st["age_months"], errors="coerce"), [b[1] for b in AGE_BANDS] + [AGE_BANDS[-1][2]], right=False,
+                            labels=[b[0] for b in AGE_BANDS])
+    out = []
+    for site in sites:
+        for f in sorted(Path(harmonised_dir).glob(f"{site}_*.parquet")):
+            if f.stem.endswith(("_rejected", "_drugs", "_fluids")):
+                continue
+            d = pd.read_parquet(f, columns=["stay_key", "concept", "value", "flag"])
+            d = d[d["value"].notna()]
+            if concepts is not None:
+                d = d[d["concept"].isin(concepts)]
+            d = d[~d["flag"].fillna("").isin(drop_flags)]
+            d["stay_key"] = d["stay_key"].astype(str)
+            m = d.groupby(["stay_key", "concept"], sort=False, observed=True)["value"].median().rename("value").reset_index()
+            m.insert(0, "site", site)
+            out.append(m)
+    m = pd.concat(out, ignore_index=True)
+    return m.merge(st, on=["site", "stay_key"], how="left")
+
+
+def unit_consistency(harmonised_dir, static, sites=C.SITES, concepts=None, min_stays=30, flag_ratio=1.3):
+    """One row per numeric concept that at least two sites share: the median of the stays' medians at each site (`med_<site>`), the crude ratio
+    of the largest to the smallest, and the age-adjusted ratio: within each age band (<1y, 1-4y, 5-11y, 12y+) where every shared site has at
+    least `min_stays` stays, the largest to smallest site median, averaged (geometric, weighted by the smallest site count). `unit_hint` names a
+    common unit factor (x10, x88.4 ...) if the adjusted ratio is within 7% of it. `flag` is True when the adjusted ratio is above `flag_ratio`.
+    A ratio near 1 after age adjustment says the sites record one quantity in one unit; a large one says a unit, assay or practice difference
+    (not which). Counts and medians only. Returns the table, sorted by adjusted ratio."""
+    m = _stay_medians(harmonised_dir, static, sites, concepts)
+    rows = []
+    for c, g in m.groupby("concept", sort=False):
+        n = g.groupby("site")["value"].size()
+        use = [s for s in sites if n.get(s, 0) >= min_stays]
+        if len(use) < 2:
+            continue
+        g = g[g["site"].isin(use)]
+        med = g.groupby("site")["value"].median()
+        row = {"concept": c, "sites": ",".join(use), **{f"med_{s}": round(float(med[s]), 4) if s in med.index else np.nan for s in sites},
+               **{f"stays_{s}": int(n.get(s, 0)) for s in sites}}
+        pos = med[med > 0]
+        row["crude_ratio"] = round(float(pos.max() / pos.min()), 3) if len(pos) == len(med) else np.nan
+        logs, ws = [], []
+        for b, _, _ in AGE_BANDS:
+            gb = g[g["age_band"] == b]
+            cnt = gb.groupby("site")["value"].size().reindex(use).fillna(0)
+            if (cnt < min_stays).any():
+                continue
+            mb = gb.groupby("site")["value"].median()
+            if (mb <= 0).any():
+                continue
+            logs.append(np.log(mb.max() / mb.min()))
+            ws.append(cnt.min())
+        row["bands_used"] = len(logs)
+        row["adjusted_ratio"] = round(float(np.exp(np.average(logs, weights=ws))), 3) if logs else np.nan
+        signed = bool((med <= 0).any())      # a median at or below zero (base excess): a ratio of medians means nothing
+        if signed:
+            row["adjusted_ratio"] = np.nan
+        row["signed"] = signed
+        row["unit_hint"] = "" if signed else (_factor_hint(row["adjusted_ratio"], c) or _factor_hint(row["crude_ratio"], c))
+        row["flag"] = bool(row["adjusted_ratio"] > flag_ratio) if (logs and not signed) else np.nan
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values("adjusted_ratio", ascending=False, na_position="last").reset_index(drop=True)
+
+
+def concept_by_age(harmonised_dir, static, concept, sites=C.SITES, quantiles=(0.1, 0.5, 0.9)):
+    """One concept: per site and age band, the number of stays and the quantiles of the stays' medians. For looking at a single concept across
+    age (creatinine rises with age, so a site with older children has higher values). Counts and quantiles only."""
+    m = _stay_medians(harmonised_dir, static, sites, [concept])
+    rows = []
+    for (s, b), g in m.groupby(["site", "age_band"], observed=True):
+        rows.append({"site": s, "age_band": b, "stays": len(g), **{f"p{int(q * 100)}": round(float(g["value"].quantile(q)), 3) for q in quantiles}})
+    return pd.DataFrame(rows).sort_values(["age_band", "site"]).reset_index(drop=True)

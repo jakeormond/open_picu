@@ -332,3 +332,267 @@ def drugs_only_report(out_root, name, static, seed=0, refresh=False):
         pickle.dump(res, fh)
     print(f"{name}: drugs only computed and saved")
     return res
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------
+# Site inference from values and recording pattern, not only from what is present
+# ---------------------------------------------------------------------------------------------------------------------------------------
+
+def _value_features(out_root, name, stays):
+    """Per stay and concept, from the numeric series rows of the released files (not drugs): the median value, the number of rows and the median
+    gap in hours between consecutive rows. Returns three stay x concept frames indexed by `stays`. Not the series itself."""
+    parts = []
+    for f in _released_files(out_root, name, drugs=False):
+        d = pd.read_parquet(f, columns=["stay_key", "concept", "hour", "value"])
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d[d["value"].notna()]
+        d["stay_key"] = d["stay_key"].astype(str).astype("category")
+        d["concept"] = d["concept"].astype(str).astype("category")
+        parts.append(d)
+    d = pd.concat(parts, ignore_index=True)
+    d["stay_key"] = d["stay_key"].astype(str)
+    d["concept"] = d["concept"].astype(str)
+    d = d.sort_values(["stay_key", "concept", "hour"], kind="stable")
+    g = d.groupby(["stay_key", "concept"], sort=False)
+    med = g["value"].median().unstack("concept")
+    n = g["value"].size().unstack("concept")
+    d["gap"] = g["hour"].diff()
+    gap = d.groupby(["stay_key", "concept"], sort=False)["gap"].median().unstack("concept")
+    return [x.reindex(stays) for x in (med, n, gap)]
+
+
+def value_report(out_root, name, static, include_drugs=True, seed=0, refresh=False, drop=()):
+    """Site inference that sees values and recording pattern as well as presence (`site_report` sees only presence). Per stay and concept:
+    the median value ("med_"), the number of rows ("n_") and the median gap in hours between rows ("gap_"), used as numbers, missing where the
+    stay has no row of the concept. Variants, each with the stay's concept-presence columns:
+      concepts + median values
+      concepts + values + recording pattern (rows and gaps)
+      everything: static fields, concepts, drugs (presence), values and recording pattern.
+    Compare with the `site_report` variants for the same level: the difference is what values and recording pattern add. Not used: text strings,
+    drug units and routes, the series itself. Same classifier and folds as `site_report`. The result is cached like `cached_site_report`.
+    drop: concepts the attacker is not given (presence, value and pattern), to test how much of the result rests on them; the cache name then
+    carries the dropped concepts."""
+    import pickle
+    p = Path(out_root) / "_private" / f"value_report_{name}_drugs{int(include_drugs)}_seed{seed}{'_drop_' + '-'.join(sorted(drop)) if drop else ''}.pkl"
+    files = list(_level_dir(out_root, name).glob("*.parquet")) + [Path(out_root) / "_private" / f"{name}_key_map.parquet"]
+    if p.exists() and not refresh and p.stat().st_mtime >= max(f.stat().st_mtime for f in files):
+        print(f"{name}: value report loaded from cache")
+        with open(p, "rb") as fh:
+            return pickle.load(fh)
+    st = load_static(out_root, name)
+    stays = st["stay_key"].astype(str).tolist()
+    st = st.assign(stay_key=stays).set_index("stay_key")
+    site, groups = labels(out_root, name, static, stays)
+    avail = _presence(out_root, name, stays, drugs=False).drop(columns=list(drop), errors="ignore").add_prefix("has_")
+    med, n, gap = [x.drop(columns=list(drop), errors="ignore") for x in _value_features(out_root, name, stays)]
+    vals = med.add_prefix("med_")
+    pattern = n.add_prefix("n_").join(gap.add_prefix("gap_"))
+    variants = {"concepts + median values": avail.join(vals),
+                "concepts + values + recording pattern": avail.join(vals).join(pattern)}
+    full = st.join(avail)
+    if include_drugs:
+        full = full.join(_presence(out_root, name, stays, drugs=True).add_prefix("drug_"))
+    variants["everything (static, drugs, values, pattern)"] = full.join(vals).join(pattern)
+    out = {}
+    for label, X in variants.items():
+        num = [c for c in X.columns if c.startswith(("med_", "n_", "gap_"))]
+        r = R.site_inference(X.reset_index(drop=True), site, drop_one=False, seed=seed, groups=groups, numeric=num)
+        r["stays"], r["features"] = len(X), X.shape[1]
+        out[label] = r
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "wb") as fh:
+        pickle.dump(out, fh)
+    print(f"{name}: value report computed and saved")
+    return out
+
+
+def concept_importance(out_root, name, static, seed=0, repeats=3, refresh=False):
+    """Which concepts give the site away to a value-aware attacker. One classifier per fold (stays of a patient stay together) is fitted on
+    every concept's presence, median value, row count and gap; then, on the held-out stays, the columns of one concept are shuffled across
+    stays and the fall in accuracy is recorded (percentage points, mean over folds and `repeats` shuffles; negative is noise). Columns:
+      all      the concept's presence, value and recording pattern shuffled together (what the attacker loses without that concept)
+      values   only its median value shuffled
+      pattern  only its row count and gap shuffled
+    Shuffling understates a concept whose information is shared with another (for example two blood-gas values); read it as a ranking, not a
+    sum. Counts only. Cached as `_private/concept_importance_<name>_seed<seed>.pkl`."""
+    import pickle
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.model_selection import StratifiedGroupKFold
+    p = Path(out_root) / "_private" / f"concept_importance_{name}_seed{seed}.pkl"
+    files = list(_level_dir(out_root, name).glob("*.parquet")) + [Path(out_root) / "_private" / f"{name}_key_map.parquet"]
+    if p.exists() and not refresh and p.stat().st_mtime >= max(f.stat().st_mtime for f in files):
+        print(f"{name}: concept importance loaded from cache")
+        with open(p, "rb") as fh:
+            return pickle.load(fh)
+    st = load_static(out_root, name)
+    stays = st["stay_key"].astype(str).tolist()
+    site, groups = labels(out_root, name, static, stays)
+    avail = _presence(out_root, name, stays, drugs=False).astype(float)
+    med, n, gap = _value_features(out_root, name, stays)
+    concepts = [c for c in avail.columns if c in med.columns]
+    parts = {"has": avail[concepts], "med": med[concepts], "n": n[concepts], "gap": gap[concepts]}
+    X = pd.concat([v.add_prefix(k + "_") for k, v in parts.items()], axis=1)
+    cols = {c: {"all": [f"{k}_{c}" for k in parts], "values": [f"med_{c}"], "pattern": [f"n_{c}", f"gap_{c}"]} for c in concepts}
+    Z = X.to_numpy(dtype="float64")
+    idx = {c: i for i, c in enumerate(X.columns)}
+    y = np.asarray(site).astype(str)
+    rng = np.random.default_rng(seed)
+    drops = {c: {k: [] for k in ("all", "values", "pattern")} for c in concepts}
+    folds = StratifiedGroupKFold(5, shuffle=True, random_state=seed)
+    for tr, te in folds.split(Z, y, groups=np.asarray(groups)):
+        m = HistGradientBoostingClassifier(random_state=seed, max_iter=100).fit(Z[tr], y[tr])
+        base = float((m.predict(Z[te]) == y[te]).mean())
+        for c in concepts:
+            for kind, cs in cols[c].items():
+                ci = [idx[k] for k in cs]
+                for _ in range(repeats):
+                    W = Z[te].copy()
+                    W[:, ci] = W[rng.permutation(len(te))][:, ci]
+                    drops[c][kind].append(base - float((m.predict(W) == y[te]).mean()))
+    out = pd.DataFrame({c: {k: round(100 * float(np.mean(v)), 2) for k, v in d.items()} for c, d in drops.items()}).T
+    out = out.sort_values("all", ascending=False)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "wb") as fh:
+        pickle.dump(out, fh)
+    print(f"{name}: concept importance computed and saved")
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------
+# Figures for the site-inference work (all from cached reports; counts and percentages only)
+# ---------------------------------------------------------------------------------------------------------------------------------------
+_VARIANT_LABELS = {"static fields": "Static fields", "concepts present": "Which concepts are present",
+                   "static + concepts + drugs": "Static + concepts + drugs present",
+                   "concepts + median values": "Concepts + median values",
+                   "concepts + values + recording pattern": "Concepts + values + recording pattern",
+                   "everything (static, drugs, values, pattern)": "Everything (static, drugs, values, pattern)"}
+
+
+def _all_variants(out_root, name, static):
+    """Presence-only and value-aware results of one level in one dict (both from the cache; computed if missing)."""
+    res = dict(cached_site_report(out_root, name, static))
+    res.update(value_report(out_root, name, static))
+    return {k: res[k] for k in _VARIANT_LABELS if k in res}
+
+
+def fig_attacker_ladder(out_root, name, static, path=None):
+    """Horizontal bars: balanced accuracy of guessing the site (mean recall over the sites) for what the attacker is given, from least to
+    most. The dashed line is chance (one in the number of sites). The sets are not strictly nested (static fields appear in three of them),
+    the label says what each holds."""
+    import matplotlib.pyplot as plt
+    res = _all_variants(out_root, name, static)
+    t = summary(res).set_index("variant")
+    vals = (t["balanced_acc"] * 100).sort_values()
+    n_sites = len([c for c in t.columns if c.startswith("recall_")])
+    fig, ax = plt.subplots(figsize=(8.5, 3.6))
+    R._ax(ax)
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", color=R.GRID, linewidth=0.8)
+    y = np.arange(len(vals))
+    ax.barh(y, vals.values, color=R.CAT[0], height=0.62)
+    for yi, v in zip(y, vals.values):
+        ax.text(v + 0.8, yi, f"{v:.1f}%", va="center", fontsize=9, color=R.INK)
+    ax.axvline(100 / n_sites, color=R.INK2, linestyle="--", linewidth=1)
+    ax.text(100 / n_sites + 0.8, -0.62, f"chance {100 / n_sites:.0f}%", fontsize=8.5, color=R.INK2, va="center")
+    ax.set_ylim(-0.9, len(vals) - 0.4)
+    ax.set_yticks(y)
+    ax.set_yticklabels([_VARIANT_LABELS[v] for v in vals.index], fontsize=9, color=R.INK)
+    ax.set_xlim(0, 108)
+    ax.set_xlabel("Balanced accuracy of guessing the site (%)", color=R.INK2, fontsize=9)
+    ax.set_title(f"What an attacker needs to guess the site ({name})", loc="left", fontsize=11, color=R.INK, pad=10)
+    return R._save(fig, path)
+
+
+def fig_site_recall(out_root, name, static, path=None):
+    """Grouped bars: recall for each site (the share of that site's stays guessed correctly) for each attacker variant."""
+    import matplotlib.pyplot as plt
+    t = summary(_all_variants(out_root, name, static))
+    sites = [c.replace("recall_", "") for c in t.columns if c.startswith("recall_")]
+    fig, ax = plt.subplots(figsize=(9, 3.9))
+    R._ax(ax)
+    w = 0.8 / len(sites)
+    x = np.arange(len(t))
+    for i, s in enumerate(sites):
+        v = t[f"recall_{s}"] * 100
+        ax.bar(x + (i - (len(sites) - 1) / 2) * w, v, width=w * 0.92, color=R.CAT[i], label=s)
+        for xi, vi in zip(x + (i - (len(sites) - 1) / 2) * w, v):
+            ax.text(xi, vi + 1, f"{vi:.0f}", ha="center", fontsize=7.5, color=R.INK2)
+    ax.axhline(100 / len(sites), color=R.INK2, linestyle="--", linewidth=1)
+    ax.set_xticks(x)
+    import textwrap
+    ax.set_xticklabels([textwrap.fill(_VARIANT_LABELS[v], 17) for v in t["variant"]], fontsize=7.5, color=R.INK)
+    ax.set_ylim(0, 108)
+    ax.set_ylabel("Stays of the site guessed correctly (%)", color=R.INK2, fontsize=9)
+    ax.legend(frameon=False, fontsize=9, ncol=len(sites), loc="upper left")
+    ax.set_title(f"Recall by site ({name})", loc="left", fontsize=11, color=R.INK, pad=10)
+    return R._save(fig, path)
+
+
+def fig_removal(out_root, name, static, drops, variants=("concepts + values + recording pattern", "everything (static, drugs, values, pattern)"), path=None):
+    """Balanced accuracy of the value-aware attacker when groups of concepts are removed. `drops`: label -> list of concepts, in the order shown
+    (the first point is no concepts removed). Reads or fills the `value_report` cache. Shows that removing concepts does not hide the site."""
+    import matplotlib.pyplot as plt
+    pts = {"none removed": ()} | {k: tuple(v) for k, v in drops.items()}
+    rows = {}
+    for label, d in pts.items():
+        t = summary(value_report(out_root, name, static, drop=d)).set_index("variant")
+        rows[label] = {v: float(t.loc[v, "balanced_acc"]) * 100 for v in variants}
+    n_sites = len([c for c in summary(value_report(out_root, name, static)).columns if c.startswith("recall_")])
+    fig, ax = plt.subplots(figsize=(8.5, 3.9))
+    R._ax(ax)
+    x = np.arange(len(pts))
+    for i, v in enumerate(variants):
+        y = [rows[k][v] for k in pts]
+        ax.plot(x, y, marker="o", color=R.CAT[i], linewidth=2, markersize=6, label=_VARIANT_LABELS[v].split(" (")[0])
+        for xi, yi in zip(x, y):
+            ax.text(xi, yi + 2.2 if i == 0 else yi - 4.6, f"{yi:.1f}", ha="center", fontsize=8, color=R.INK2)
+    ax.axhline(100 / n_sites, color=R.INK2, linestyle="--", linewidth=1)
+    ax.text(0, 100 / n_sites + 1.5, f"chance {100 / n_sites:.0f}%", fontsize=8.5, color=R.INK2)
+    ax.set_xticks(x)
+    import textwrap
+    ax.set_xticklabels([textwrap.fill(k, 16) for k in pts], fontsize=8, color=R.INK)
+    ax.set_xlim(-0.3, len(pts) - 1 + 0.3)
+    ax.legend(frameon=False, fontsize=9, loc="center right", bbox_to_anchor=(1.0, 0.55))
+    ax.set_ylim(0, 108)
+    ax.set_ylabel("Balanced accuracy (%)", color=R.INK2, fontsize=9)
+    ax.set_title(f"Removing the most revealing concepts does not hide the site ({name})", loc="left", fontsize=11, color=R.INK, pad=10)
+    return R._save(fig, path)
+
+
+def fig_concept_by_age(by_age, concept="creatinine", unit="umol/L", path=None):
+    """One concept across age bands, one line per site: median of the stays' medians with the 10th to 90th percentile as a bar. `by_age` is
+    the table from `harmonise.concept_by_age`. Separates a site difference that holds in every age band (assay or unit) from case mix."""
+    import matplotlib.pyplot as plt
+    order = [b[0] for b in __import__("harmonise").AGE_BANDS]
+    sites = sorted(by_age["site"].unique())
+    fig, ax = plt.subplots(figsize=(8, 3.9))
+    R._ax(ax)
+    x = np.arange(len(order))
+    for i, s in enumerate(sites):
+        g = by_age[by_age["site"] == s].set_index("age_band").reindex(order)
+        xs = x + (i - (len(sites) - 1) / 2) * 0.12
+        ax.vlines(xs, g["p10"], g["p90"], color=R.CAT[i], linewidth=3, alpha=0.35)
+        ax.plot(xs, g["p50"], marker="o", color=R.CAT[i], linewidth=2, markersize=6, label=s)
+    ax.set_xticks(x)
+    ax.set_xticklabels(order, fontsize=9, color=R.INK)
+    ax.set_xlim(-0.4, len(order) - 1 + 0.4)
+    ax.set_ylim(bottom=0)
+    ax.legend(frameon=False, fontsize=9, loc="upper left")
+    ax.set_ylabel(f"{concept} ({unit})", color=R.INK2, fontsize=9)
+    ax.set_xlabel("Age band", color=R.INK2, fontsize=9)
+    ax.set_title(f"{concept.capitalize()} by site and age (dot: median; bar: 10th to 90th percentile)", loc="left", fontsize=10.5, color=R.INK, pad=10)
+    return R._save(fig, path)
+
+
+def site_figures(out_root, name, static, drops, by_age, outdir):
+    """Make the four figures and save them as PNG in `outdir`. Returns the paths."""
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    made = {}
+    for key, fn in (("attacker_ladder", lambda p: fig_attacker_ladder(out_root, name, static, p)),
+                    ("site_recall", lambda p: fig_site_recall(out_root, name, static, p)),
+                    ("removal", lambda p: fig_removal(out_root, name, static, drops, path=p)),
+                    ("creatinine_by_age", lambda p: fig_concept_by_age(by_age, path=p))):
+        made[key] = outdir / f"site_{key}_{name}.png"
+        fn(made[key])
+    return made

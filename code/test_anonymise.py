@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from dataclasses import replace
 import pandas as pd
 
 import anonymise as A
@@ -314,6 +315,73 @@ def test_gosh_epic_cutoff():
     raise AssertionError("bad cutoff accepted")
 
 
+def test_patient_report():
+    try:
+        import patient_report as PR
+    except ImportError:
+        return
+    import tempfile
+    # end to end on a synthetic Tier 2 level: the series are identical across stays, so measurements cannot single a stay out
+    tmp, static, steps, checks = run_level(T2)
+    div = PR.outcome_diversity(tmp / "out", "tier2")
+    assert {"item", "n", "share_or_rate"} <= set(div.columns) and div["share_or_rate"].dropna().between(0, 1).all()
+    att = PR.known_observation_attack(tmp / "out", "tier2", ms=(1, 3, 5), n_targets=80)
+    s1 = att[(att["known"] == "series only") & (att["m"] == 1)].iloc[0]
+    assert s1["unique"] == 0 and s1["median_candidates"] > 100
+    s0 = att[att["m"] == 0].iloc[0]
+    assert s0["known"] == "static fields only" and s0["median_candidates"] >= 1
+    link = PR.repeat_stay_linkage(tmp / "out", "tier2", static)
+    assert len(link) == 2 and link["chance"].between(0, 1).all() and link["hit"].between(0, 1).all()
+    # distinct values: every stay is found from three measurements
+    rng = np.random.default_rng(3)
+    root = Path(tempfile.mkdtemp()); d = root / "lv"; d.mkdir()
+    n = 200
+    pd.DataFrame({"stay_key": [f"S{i:04d}" for i in range(n)], "age_band": "1y", "sex": "Male", "weight_band": "w", "died": False,
+                  "diagnosis_group": "x"}).to_parquet(d / "static.parquet")
+    rows = [(f"S{i:04d}", c, float(h), float(rng.normal(100, 20))) for i in range(n) for c in ("hr", "bp") for h in range(10)]
+    pd.DataFrame(rows, columns=["stay_key", "concept", "hour", "value"]).to_parquet(d / "vitals.parquet")
+    a = PR.known_observation_attack(root, "lv", ms=(1, 3), n_targets=100)
+    r3 = a[(a["known"] == "series only") & (a["m"] == 3)].iloc[0]
+    assert r3["unique"] > 0.95 and r3["below_k"] > 0.95
+    a2 = PR.known_observation_attack(root, "lv", ms=(1,), n_targets=100, rel_tol=0.5)
+    assert a2[(a2["known"] == "series only") & (a2["m"] == 1)].iloc[0]["median_candidates"] > a[(a["known"] == "series only") & (a["m"] == 1)].iloc[0]["median_candidates"]
+
+
+def test_value_report():
+    try:
+        import sklearn  # noqa: F401
+        import level_report as LR
+        import reid
+    except ImportError:
+        return
+    # numeric columns are used as numbers: a value shifted by site is found, as categories it would be hopeless
+    rng = np.random.default_rng(4)
+    site = np.repeat(["A", "B"], 300)
+    X = pd.DataFrame({"v": np.r_[rng.normal(0, 1, 300), rng.normal(3, 1, 300)], "c": "x"})
+    as_num = reid.site_inference(X, site, drop_one=False, numeric=["v"])["accuracy"]
+    as_cat = reid.site_inference(X, site, drop_one=False)["accuracy"]
+    assert as_num > 0.9 and as_cat < as_num
+    tmp, static, steps, checks = run_level(T2)
+    res = LR.value_report(tmp / "out", "tier2", static)
+    assert set(res) == {"concepts + median values", "concepts + values + recording pattern", "everything (static, drugs, values, pattern)"}
+    t = LR.summary(res)
+    assert t["accuracy"].between(0, 1).all() and (t["features"] > 0).all()
+    again = LR.value_report(tmp / "out", "tier2", static)
+    assert LR.summary(again).equals(t)
+    top = next(c for c in LR.concept_importance(tmp / "out", "tier2", static, repeats=1).index[:1])
+    ab = LR.value_report(tmp / "out", "tier2", static, drop=[top])
+    assert set(ab) == set(res) and all(ab[k]["features"] < res[k]["features"] for k in res)
+    import matplotlib
+    matplotlib.use("Agg")
+    import harmonise as H
+    by = H.concept_by_age(tmp / "h", static, "hr")
+    figs = LR.site_figures(tmp / "out", "tier2", static, {"drop one": [top]}, by, tmp / "figs")
+    assert all(p.exists() and p.stat().st_size > 5000 for p in figs.values()) and len(figs) == 4
+    imp = LR.concept_importance(tmp / "out", "tier2", static, repeats=1)
+    assert list(imp.columns) == ["all", "values", "pattern"] and len(imp) > 0
+    assert imp["all"].is_monotonic_decreasing
+
+
 def test_drop_static_fields():
     for cfg in (A.preset("tier2_no_ethnicity", max_small_share=None), A.preset("tier1", name="tier1_no_eth", seed=7, drop_static=("ethnicity", "weight"))):
         tmp, static, steps, checks = run_level(cfg)
@@ -405,6 +473,51 @@ def test_levels_differ_only_by_config():
     tmp, static, steps, checks = run_level(cfg)
     v = pd.read_parquet(tmp / "out" / "tier2_hourly" / "vitals.parquet")
     assert np.allclose(v["hour"], np.round(v["hour"]))
+    cfg = A.preset("tier2_hourly", name="tier2_hourly_one", one_row_per_hour=True, max_small_share=None, seed=40)
+    tmp, static, steps, checks = run_level(cfg)
+    v1 = pd.read_parquet(tmp / "out" / "tier2_hourly_one" / "vitals.parquet")
+    num = v1[v1["value"].notna()]
+    assert not num.duplicated([c for c in ("stay_key", "concept", "hour", "source") if c in num.columns]).any() and len(v1) <= len(v)
+    assert (checks[(checks["check"] == "rows")]["status"] == "pass").all()
+    back = A.config_from_level(tmp / "out", "tier2_hourly_one", name="y")
+    assert back == replace(cfg, name="y")
+    _expect_value_error = False
+    try:
+        A.preset("tier2", one_row_per_hour=True)
+    except ValueError as e:
+        _expect_value_error = "time_resolution_hours" in str(e)
+    assert _expect_value_error
+
+
+def test_one_row_per_hour_merge():
+    cfg = A.preset("tier2_hourly", name="x", one_row_per_hour=True, max_small_share=None)
+    df = pd.DataFrame({"stay_key": ["a"] * 5, "concept": ["hr"] * 3 + ["spo2"] * 2, "hour": [0.1, 0.3, 0.4, 2.0, 2.2],
+                       "value": [100., 110., 120., 95., 97.], "value_text": [None] * 5, "value_raw": ["100", "110", "120", "95", "97"],
+                       "source": [None] * 5, "flag": [0] * 5})
+    o, log = A.transform_series(df, "RBH", "vitals", {"a": "S1"}, cfg, set())
+    assert log["rows_merged_hourly"] == 3 and sorted(o["value"]) == [96.0, 110.0] and o["value_raw"].isna().all()
+
+
+def test_unit_consistency():
+    import tempfile, harmonise as H
+    tmp = Path(tempfile.mkdtemp())
+    static = make_static()
+    make_harmonised(tmp / "h", static)
+    u = H.unit_consistency(tmp / "h", static)
+    r = u[u["concept"] == "hr"].iloc[0]
+    assert r["adjusted_ratio"] == 1.0 and not r["flag"] and r["bands_used"] >= 2
+    f = tmp / "h" / f"{SITES[0]}_vitals.parquet"
+    if not f.exists():
+        f = next((tmp / "h").glob(f"{SITES[0]}_*.parquet"))
+    d = pd.read_parquet(f)
+    d.loc[d["concept"] == "hr", "value"] *= 88.4
+    d.to_parquet(f, index=False)
+    u = H.unit_consistency(tmp / "h", static)
+    r = u[u["concept"] == "hr"].iloc[0]
+    assert r["flag"] and "88.4" in r["unit_hint"]
+    assert H._factor_hint(1.8, "bilirubin") == "" and H._factor_hint(7.5, "bg_po2") != "" and H._factor_hint(7.5, "alt") == ""
+    by = H.concept_by_age(tmp / "h", static, "hr")
+    assert set(by["site"]) == set(SITES) and (by["stays"] > 0).all()
 
 
 def test_reproducible_keys():

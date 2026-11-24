@@ -412,19 +412,24 @@ def pattern_site_share(avail, min_count=10):
     return {"stays": len(a), "share_pattern_at_one_site_only": round(float((nsites == 1).mean()), 4)}
 
 
-def site_inference(X, site, cv=5, drop_one=True, seed=0, groups=None):
+def site_inference(X, site, cv=5, drop_one=True, seed=0, groups=None, numeric=()):
     """How well the site can be guessed from the columns of X (one row per stay; categorical and boolean columns are one-hot encoded, missing
     values count as a category). Cross-validated accuracy of a gradient-boosting classifier against the baseline of always guessing the largest
     site, and per-site recall. drop_one=True also reports the accuracy with each column left out, to show which columns give the site away.
     groups: one label per row (for example site and patient) so that all stays of a patient fall in the same fold; without it a patient's
-    stays can be in both training and test folds, which makes the site look easier to guess than it is. Needs scikit-learn. Counts only;
+    stays can be in both training and test folds, which makes the site look easier to guess than it is. numeric: names of columns to use as
+    numbers (missing stays missing; the classifier handles it) instead of as categories, for value summaries. Needs scikit-learn. Counts only;
     no values from X are shown."""
     from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.model_selection import cross_val_predict, StratifiedKFold, StratifiedGroupKFold
     y = pd.Series(np.asarray(site)).astype(str)
+    numeric_set = set(numeric)
 
     def acc(cols):
-        Z = pd.get_dummies(X[cols].astype("string").fillna("(missing)"), dtype=float)
+        num = [c for c in cols if c in numeric_set]
+        Z = pd.get_dummies(X[[c for c in cols if c not in numeric_set]].astype("string").fillna("(missing)"), dtype=float)
+        if num:
+            Z = pd.concat([Z, X[num].astype("float64")], axis=1)
         folds = StratifiedGroupKFold(cv, shuffle=True, random_state=seed) if groups is not None else StratifiedKFold(cv, shuffle=True, random_state=seed)
         p = cross_val_predict(HistGradientBoostingClassifier(random_state=seed, max_iter=100), Z.to_numpy(), y.to_numpy(),
                               cv=folds, groups=None if groups is None else np.asarray(groups))
