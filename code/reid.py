@@ -176,18 +176,25 @@ WEIGHT_COARSE = [0, 5, 10, 20, 40, np.inf]
 LOS_COARSE = [0, 24, 72, 240, np.inf]
 
 
-def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)", by_site=True):
+def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)", by_site=True, spread=()):
     """Local suppression: stays are all kept; for stays whose combination of `key_cols` is shared by fewer than k stays at their site, one
     field at a time (in `order`, least valuable first) is replaced by `token`, recomputing the cells after each field, until no stay is in a
     cell below k or the fields are used up. by_site=True counts cells within each site (the site is a visible column); by_site=False counts
     them across all sites (the site column is not released). Returns (frame, report): per field the number of values suppressed, and at the end the stays
-    still in cells below k. Counts only. A field in `order` that is not in `key_cols` is still suppressed when it is listed."""
+    still in cells below k. Counts only. A field in `order` that is not in `key_cols` is still suppressed when it is listed.
+    spread: key columns that do not decide *which* stays are suppressed (for example ("died",)). A stay is suppressed when any stay that shares
+    its other key columns is in a small cell, so the suppressed token is not carried only by the rarer value of the spread column. Without it,
+    the stays suppressed for being in a small (..., died) cell are nearly all deaths, and "(suppressed)" then tells the outcome."""
     out = coarse.copy()
     rows = []
     for f in order:
         cols = [c for c in key_cols if c in out.columns]
         size = out.groupby(([out["site"]] if by_site else []) + [out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
         small = size < k
+        if spread and small.any():
+            rest = [c for c in cols if c not in spread]
+            grp = ([out["site"]] if by_site else []) + [out[c].astype("string").fillna("(missing)") for c in rest]
+            small = small.groupby(grp).transform("any") if grp else pd.Series(True, index=out.index)
         if f in out.columns and small.any():
             out[f] = out[f].astype("string").mask(small, token)
         rows.append({"field": f, "values_suppressed": int(small.sum()) if f in out.columns else 0})

@@ -96,9 +96,21 @@ class Config:
     gosh_epic_cutoff       None, or a date ("2019-04-20"): GOSH stays whose t0 is on or after it are left out of the level altogether (static, series,
                            drugs, key map). GOSH moved to Epic at that date and the later stays lack blood gas, ventilator mode, tidal volume, I:E
                            ratio and diastolic pressures, and have the incomplete caboodle fluids (FLUIDS.md; `harmonise.gosh_era_comparison`).
+    suppress_outcome_blind  suppress a field for every stay that shares the other quasi-identifiers (age, sex, diagnosis group, ethnicity) of a
+                           stay in a small cell, whatever its outcome. Default False suppresses only the stays in the small (..., died) cell, which
+                           are nearly all deaths, so "(suppressed)" then reveals the outcome (`patient_report.outcome_cells`).
+    k                      Tier 2: the smallest group of stays that may share the released quasi-identifiers (age band, sex, ethnicity, diagnosis group,
+                           outcome, weight band). The target for the patient-level review is k = 2 with the average risk reported (see
+                           `patient_report.adversary_risk`); raise it when the cost is small.
+    text_k                 Tier 2 free-text rule: a `value_text` or `value_raw` string seen in fewer than this many stays at a site and concept is
+                           'rare' (replaced). Kept apart from `k` so that a low k for the static table does not weaken it. Default 10.
+    delete_below_k         after local suppression, delete the stays that are still in a cell below k from the level altogether (static, series,
+                           drugs, key map), as AmsterdamUMCdb did. The number deleted is logged ("static: stays deleted below k").
     max_small_share        Tier 2 static check: largest accepted share of stays in cells below k (None: report only)."""
     name: str = "tier1"
     k: int = 10
+    text_k: int = 10
+    delete_below_k: bool = False
     seed: int = 1
     site_column: bool = True
     patient_key: str = "key"
@@ -125,6 +137,7 @@ class Config:
     drop_gosh_unitless: bool = False
     drop_gosh_caboodle: bool = False
     gosh_epic_cutoff: object = None
+    suppress_outcome_blind: bool = False
     max_small_share: float | None = None
 
     def validate(self):
@@ -388,7 +401,7 @@ def build_static(co, km, cfg):
         gone = dropped_static_columns(cfg)
         key_cols = [c for c in ["age_band", "sex", "ethnicity", "diagnosis_group", "died", "weight_band"] if c not in gone]
         order = [c for c in cfg.suppress_order if c not in gone]
-        coarse, rep = R.suppress_to_k(coarse, key_cols, order, k=cfg.k, by_site=False)
+        coarse, rep = R.suppress_to_k(coarse, key_cols, order, k=cfg.k, by_site=False, spread=("died",) if cfg.suppress_outcome_blind else ())
         for r in rep.itertuples():
             log.append({"step": "static: local suppression", "item": r.field, "n": int(r.values_suppressed)})
         out = coarse.merge(co[["site", "stay_key", "pim"]], on=["site", "stay_key"], how="left")
@@ -466,9 +479,9 @@ def transform_series(df, site, kind, keymap, cfg, multi):
         df["hour"] = new
 
     if "value_text" in df.columns:
-        common = common_strings(df, "value_text", cfg.k)
+        common = common_strings(df, "value_text", cfg.text_k)
         if cfg.text_rare_rule:                       # rare strings become "rare" first; what is left is vocabulary
-            rare = _rare_pairs(df, "value_text", cfg.k)
+            rare = _rare_pairs(df, "value_text", cfg.text_k)
             m = _in_pairs(df, "value_text", rare)
             log["text_rare_mapped"] = int(m.sum())
             if "value_raw" in df.columns:
@@ -478,13 +491,13 @@ def transform_series(df, site, kind, keymap, cfg, multi):
         log["text_note_nulled"] = int(m.sum())
         df.loc[m, "value_text"] = pd.NA
     if "value_raw" in df.columns:
-        m = note_like(df["value_raw"], cfg.raw_max_len, common_strings(df, "value_raw", cfg.k)).to_numpy()
+        m = note_like(df["value_raw"], cfg.raw_max_len, common_strings(df, "value_raw", cfg.text_k)).to_numpy()
         log["raw_note_nulled"] = int(m.sum())
         df.loc[m, "value_raw"] = pd.NA
         if cfg.text_rare_rule and "value_text" in df.columns:
             textc = df.loc[df["value_text"].notna(), "concept"].unique()
             sub = df[df["concept"].isin(textc)]
-            rare = _rare_pairs(sub, "value_raw", cfg.k)
+            rare = _rare_pairs(sub, "value_raw", cfg.text_k)
             m = _in_pairs(df, "value_raw", rare) & df["concept"].isin(textc).to_numpy()
             log["raw_rare_nulled"] = int(m.sum())
             df.loc[m, "value_raw"] = pd.NA
@@ -551,7 +564,7 @@ def check_frame(df, scope, cfg, ids, allowed, max_abs_hour=24 * 365, short_ids=f
     notes = 0
     for c in ("value_raw", "value_text"):
         if c in df.columns:
-            notes += int(note_like(pd.Series(df[c].dropna().unique()), cfg.raw_max_len, common_strings(df, c, cfg.k)).sum())
+            notes += int(note_like(pd.Series(df[c].dropna().unique()), cfg.raw_max_len, common_strings(df, c, cfg.text_k)).sum())
     ft = _chk("free text", scope, len(free) + notes, not free and notes == 0,
               ("many long strings in: " + ",".join(free) + "; " if free else "") + f"note-like strings {notes}")
     if free and notes == 0 and not cfg.text_rare_rule:
@@ -589,6 +602,13 @@ def check_small_cells(static_out, cfg):
     ok = cfg.max_small_share is None or share <= cfg.max_small_share
     note = f"{share:.4%} of {len(static_out)} stays in cells below {cfg.k} on {','.join(cols)}; threshold " + ("none (report only)" if cfg.max_small_share is None else f"{cfg.max_small_share:.4%}")
     return [_chk("small cells", "static", n, ok, note)]
+
+
+def stays_below_k(static_out, k):
+    """Boolean Series: stays whose combination of released quasi-identifiers (as in `check_small_cells`) is shared by fewer than k stays."""
+    cols = [c for c in QUASI + (["pim_band"] if "pim_band" in static_out.columns else []) if c in static_out.columns]
+    size = static_out.groupby([static_out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
+    return size < k
 
 
 def split_group_report(static_out):
@@ -650,6 +670,18 @@ def run(harmonised_dir, static, out_root, cfg, sites=SITES, reports_dir=None, ex
     steps.append({"step": "keys", "item": "stay keys", "n": len(km)})
 
     st, log = build_static(co, km, cfg)
+    if cfg.delete_below_k and cfg.static_mode == "coarse":
+        gone = stays_below_k(st, cfg.k)
+        gone_keys = set(st.loc[gone, "stay_key"])
+        n_pat = int(co.merge(km[km["new_stay_key"].isin(gone_keys)][["site", "stay_key"]], on=["site", "stay_key"]).drop_duplicates(["site", "patient_id"]).shape[0]) if "patient_id" in co.columns else 0
+        km_gone = km[km["new_stay_key"].isin(gone_keys)][["site", "stay_key"]]
+        co = co.merge(km_gone.assign(_gone=1), on=["site", "stay_key"], how="left")
+        co = co[co["_gone"].isna()].drop(columns="_gone").reset_index(drop=True)
+        km = km[~km["new_stay_key"].isin(gone_keys)].reset_index(drop=True)
+        km.to_parquet(private / f"{cfg.name}_key_map.parquet", index=False)
+        st = st[~gone].reset_index(drop=True)
+        log.append({"step": "static: stays deleted below k", "item": "stays", "n": int(gone.sum())})
+        log.append({"step": "static: stays deleted below k", "item": "patients with a stay deleted", "n": n_pat})
     steps += log + split_group_report(st)
     checks += check_frame(st, "static", cfg, ids, allowed_static(cfg), hour_limit, short_ids)
     checks.append(_chk("rows", "static", abs(len(st) - len(co)), len(st) == len(co), f"static rows {len(st)}, cohort stays {len(co)}"))
@@ -680,7 +712,7 @@ def run(harmonised_dir, static, out_root, cfg, sites=SITES, reports_dir=None, ex
                 checks.append(_chk("drug rule", f"{site}_{g}", lg["drop_drug_rule"], lg["drop_drug_rule"] > 0,
                                    "GOSH drug rows with a number and no unit dropped (G17); zero means the rule matched nothing"))
             if cfg.text_rare_rule:
-                checks += check_text_counts(out, f"{site}_{g}", cfg.k)
+                checks += check_text_counts(out, f"{site}_{g}", cfg.text_k)
             steps.append({"step": f"series {site}_{g}", "item": "rows in", "n": lg["rows_in"]})
             steps += [{"step": f"series {site}_{g}", "item": k, "n": v} for k, v in lg.items() if isinstance(v, (int, np.integer)) and k not in ("rows_in",)]
             if lg["columns_dropped"]:
@@ -776,7 +808,7 @@ def diagnose_text(harmonised_dir, static, cfg, site, group, top=10):
         if not len(u):
             continue
         rows.append({"column": c, "distinct": len(u), "mean_len": round(float(u.str.len().mean()), 1), "max_len": int(u.str.len().max()),
-                     "over_40_chars": int((u.str.len() > 40).sum()), "note_like": int(note_like(u, cfg.raw_max_len, common_strings(df, c, cfg.k) if "stay_key" in df.columns else None).sum())})
+                     "over_40_chars": int((u.str.len() > 40).sum()), "note_like": int(note_like(u, cfg.raw_max_len, common_strings(df, c, cfg.text_k) if "stay_key" in df.columns else None).sum())})
         if c in ("value_text", "value_raw"):
             g = df.dropna(subset=[c]).groupby("concept")[c].agg(distinct="nunique", mean_len=lambda x: round(float(x.str.len().mean()), 1))
             per.append(g.assign(column=c).sort_values("distinct", ascending=False).head(top).reset_index())

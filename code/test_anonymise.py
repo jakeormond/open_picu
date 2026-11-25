@@ -332,6 +332,27 @@ def test_patient_report():
     assert s0["known"] == "static fields only" and s0["median_candidates"] >= 1
     link = PR.repeat_stay_linkage(tmp / "out", "tier2", static)
     assert len(link) == 2 and link["chance"].between(0, 1).all() and link["hit"].between(0, 1).all()
+    for use in ("static", "series"):
+        l2 = PR.repeat_stay_linkage(tmp / "out", "tier2", static, use=use)
+        assert len(l2) == 2 and l2["use"].iloc[0] == use
+    l3 = PR.repeat_stay_linkage(tmp / "out", "tier2", static, scope="all", chunk=50)
+    assert l3["scope"].iloc[0] == "all" and l3["hit"].between(0, 1).all()
+    assert PR.repeat_stay_linkage(tmp / "out", "tier2", static, chunk=37)["hit"].equals(link["hit"])
+    cells = PR.outcome_cells(tmp / "out", "tier2", min_rate=0.0)
+    assert {"stays", "positive", "rate"} <= set(cells.columns) and cells["positive"].sum() == cells.attrs["positive_in_cells"]
+    sv = PR.suppression_vs_outcome(tmp / "out", "tier2")
+    assert sv.empty or {"field", "suppressed_stays", "died_among_suppressed"} <= set(sv.columns)
+    # missing values in a quasi-identifier must not break the check
+    r2 = Path(tempfile.mkdtemp()); (r2 / "lv").mkdir()
+    pd.DataFrame({"stay_key": list("abcdef"), "age_band": "1y", "sex": "M", "weight_band": ["(suppressed)", "(suppressed)", None, "w", "w", pd.NA],
+                  "died": [True, True, False, False, False, False], "diagnosis_group": "x"}).to_parquet(r2 / "lv" / "static.parquet")
+    sv2 = PR.suppression_vs_outcome(r2, "lv")
+    assert sv2.loc[0, "suppressed_stays"] == 2 and sv2.loc[0, "died_among_suppressed"] == 1.0
+    dw = PR.outcome_diversity_wildcard(tmp / "out", "tier2", static)
+    assert {"item", "n", "share_or_rate"} <= set(dw.columns) and dw["share_or_rate"].dropna().between(0, 1).all()
+    assert dw.set_index("item").loc["all stays: smallest candidate set", "n"] >= 1
+    d2 = PR.outcome_diversity(tmp / "out", "tier2", exclude=("sex",))
+    assert "sex" not in d2.attrs["fields"]
     # distinct values: every stay is found from three measurements
     rng = np.random.default_rng(3)
     root = Path(tempfile.mkdtemp()); d = root / "lv"; d.mkdir()
@@ -522,6 +543,56 @@ def test_unit_consistency():
     assert H._factor_hint(1.8, "bilirubin") == "" and H._factor_hint(7.5, "bg_po2") != "" and H._factor_hint(7.5, "alt") == ""
     by = H.concept_by_age(tmp / "h", static, "hr")
     assert set(by["site"]) == set(SITES) and (by["stays"] > 0).all()
+
+
+def test_delete_below_k_and_adversary_risk():
+    try:
+        import patient_report as PR
+    except ImportError:
+        return
+    # k = 2 with deletion: no stay is left in a cell below 2, deleted stays are gone from the static table, the key map and the series
+    cfg = replace(T2, name="tier2_k2", k=2, delete_below_k=True, suppress_order=("weight_band",), seed=4)
+    tmp, static, steps, checks = run_level(cfg)
+    st = pd.read_parquet(tmp / "out" / "tier2_k2" / "static.parquet")
+    assert not A.stays_below_k(st, 2).any()
+    n_del = int(steps[(steps["step"] == "static: stays deleted below k") & (steps["item"] == "stays")]["n"].iloc[0])
+    assert n_del > 0 and len(st) == len(A.cohort_static(static)) - n_del
+    km = pd.read_parquet(tmp / "out" / "_private" / "tier2_k2_key_map.parquet")
+    assert len(km) == len(st) and set(km["new_stay_key"]) == set(st["stay_key"])
+    assert cfg.text_k == 10
+    # the same without deletion keeps every stay
+    cfg0 = replace(cfg, name="tier2_k2_keep", delete_below_k=False, seed=5)
+    A.run(tmp / "h", static, tmp / "out", cfg0)
+    assert len(pd.read_parquet(tmp / "out" / "tier2_k2_keep" / "static.parquet")) == len(A.cohort_static(static))
+    # Table 2: the rogue researcher's maximum risk is 1/k_min, and a coarser adversary has bigger groups and a lower average risk
+    t2 = PR.adversary_risk(tmp / "out", "tier2_k2", static)
+    r = t2.set_index("adversary")
+    assert r.loc["rogue researcher", "k_min"] >= 2 and abs(r.loc["rogue researcher", "max_risk"] - 1 / r.loc["rogue researcher", "k_min"]) < 1e-12
+    assert r.loc["rogue insurer", "avg_risk"] <= r.loc["friendly researcher", "avg_risk"] + 1e-12
+    assert r.loc["informed acquaintance (extension)", "k_min"] <= r.loc["friendly researcher", "k_min"]
+    assert (r["final_risk"] <= r["p_access"] * r["p_attempt"] + 1e-12).all() and r["avg_risk"].between(0, 1).all()
+    assert abs(r.loc["friendly researcher", "p_attempt"] - PR.acquaintance_risk(t2.attrs["patients"], 12_000_000)) < 1e-12
+    assert {"l1_certain", "l1_some_suppressed", "l_unknown"} <= set(t2.columns) and t2["l_min"].dropna().ge(1).all()
+    assert t2.loc[t2["adversary"] == "rogue researcher", ["l1_certain", "l1_some_suppressed", "l_unknown"]].iloc[0].between(0, 1).all()
+    summ = PR.privacy_summary(tmp / "out", "tier2_k2", static, n_targets=60)
+    assert set(summ["role"]) == {"gate", "reported", "informational"} and summ.loc[summ["role"] == "gate", "status"].isin(["pass", "fail"]).all()
+    assert summ.loc[summ["test"] == "S2 known observations", "status"].iloc[0] == "-"
+    both = PR.risk_by_level(tmp / "out", ["tier2_k2", "tier2_k2_keep"], static)
+    assert set(both["level"]) == {"tier2_k2", "tier2_k2_keep"}
+    cost = PR.suppression_cost(tmp / "out", ["tier2_k2", "tier2_k2_keep"])
+    assert cost.loc[0, "deleted_below_k"] == n_del and cost.loc[1, "deleted_below_k"] == 0
+
+
+def test_suppress_outcome_blind():
+    # 30 survivors and 3 deaths share age, sex and diagnosis; the deaths' cell is below k, so by default only the deaths lose the weight band
+    rows = [("S%03d" % i, "1y", "M", "x", "w1", 0) for i in range(30)] + [("D%03d" % i, "1y", "M", "x", "w1", 1) for i in range(3)]
+    df = pd.DataFrame(rows, columns=["stay_key", "age_band", "sex", "diagnosis_group", "weight_band", "died"])
+    key = ["age_band", "sex", "diagnosis_group", "died", "weight_band"]
+    plain, _ = A.R.suppress_to_k(df, key, ["weight_band"], k=10, by_site=False)
+    assert (plain["weight_band"] == "(suppressed)").sum() == 3 and plain.loc[plain["weight_band"] == "(suppressed)", "died"].eq(1).all()
+    blind, _ = A.R.suppress_to_k(df, key, ["weight_band"], k=10, by_site=False, spread=("died",))
+    sup = blind["weight_band"] == "(suppressed)"
+    assert sup.sum() == 33 and 0 < blind.loc[sup, "died"].mean() < 0.2
 
 
 def test_reproducible_keys():
