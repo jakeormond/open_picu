@@ -21,7 +21,8 @@ open_picu/
     reid.py              re-identification review: uniqueness, coarsening, local suppression, site inference, figures
     anonymise.py         step 10: config-driven levels (Tier 1, Tier 2, ablations), keys, allow-lists, automated checks
     level_report.py      per-level privacy report on the written files: small cells and site inference (static fields, concepts, drugs)
-    test_anonymise.py    synthetic-data tests for anonymise.py and level_report.py (run after every change)
+    patient_report.py    patient-level privacy report on the written files: outcome diversity, known-observation attack, repeat-stay linkage (threat model in PRIVACY_THREAT_MODEL.md)
+    test_anonymise.py    synthetic-data tests for anonymise.py, level_report.py and patient_report.py (run after every change)
   notebooks/             one notebook per analysis step
     rbh_inventory, smh_inventory, gosh_inventory, manifest, assemble (also builds the static tables), concepts, concepts_checks, harmonise, reid_review, anonymise, level_report
   reports/               aggregate counts only; git-ignored, regenerated

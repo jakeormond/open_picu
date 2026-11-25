@@ -596,3 +596,53 @@ def site_figures(out_root, name, static, drops, by_age, outdir):
         made[key] = outdir / f"site_{key}_{name}.png"
         fn(made[key])
     return made
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------
+# What is in a release: the concept list
+# ---------------------------------------------------------------------------------------------------------------------------------------
+def release_manifest(out_root, name, min_share=0.01):
+    """The concept list of a released level, from its files and its stored config. Returns a dict of tables:
+      kept     one row per concept in the release: file group (vitals, vent, ...), kind (numeric, text or both), stays, rows, share of each
+               site's stays that have it, `n_sites` (sites with at least `min_share`), `merged_from` (original concepts renamed to it)
+      removed  one row per concept the level leaves out (`drop_concepts`) with the reason (one site only; not at all three sites; a
+               site-specific pattern; or other) and `mapped_at`, the sites that have a source for it in the concept map (empty for a derived
+               concept such as intake_iv). The reason is the list the concept is on, `mapped_at` is the check
+      renamed  the merges (`rename_concepts`): original concept -> concept in the release
+      drugs    one row per drug concept: stays and share of each site's stays
+    The config is read from the level's config.json, so the lists follow whatever was run. To bring a concept back, take it out of
+    `drop_concepts` and re-run the level. Counts only."""
+    cfg = AN.config_from_level(out_root, name)
+    cov = concept_coverage_released(out_root, name, min_share=min_share)
+    info = []
+    for f in _released_files(out_root, name, drugs=False):
+        d = pd.read_parquet(f, columns=[c for c in ("stay_key", "concept", "value", "value_text") if c in pd.read_parquet(f).columns])
+        num = d["value"].notna()
+        txt = d["value_text"].notna() if "value_text" in d.columns else pd.Series(False, index=d.index)
+        d = d.assign(_n=num, _t=txt)
+        g = d.groupby("concept").agg(rows=("stay_key", "size"), stays=("stay_key", "nunique"), _n=("_n", "any"), _t=("_t", "any"))
+        g["kind"] = np.where(g["_n"] & g["_t"], "both", np.where(g["_t"], "text", "numeric"))
+        g["group"] = f.stem
+        info.append(g[["group", "kind", "stays", "rows"]])
+    info = pd.concat(info).reset_index()
+    kept = info.merge(cov, on="concept", how="left")
+    inv = {}
+    for old, new in cfg.rename_concepts.items():
+        inv.setdefault(new, []).append(old)
+    kept["merged_from"] = kept["concept"].map(lambda c: ", ".join(sorted(inv.get(c, []))))
+    kept = kept.sort_values(["group", "concept"]).reset_index(drop=True)
+    why = {}
+    for c in AN.ONE_SITE_DROP:
+        why[c] = "one site only"
+    for c in AN.FEW_SITES:
+        why[c] = "not at all three sites"
+    for c in AN.SITE_PATTERN_DROP:
+        why[c] = "site-specific pattern"
+    removed = pd.DataFrame({"concept": list(cfg.drop_concepts)})
+    removed["reason"] = removed["concept"].map(why).fillna("other")
+    import concepts as CM
+    removed["mapped_at"] = removed["concept"].map(lambda c: ", ".join(s for s in CM.SITES if CM.CONCEPTS.get(c, {}).get(s)))
+    removed = removed.sort_values(["reason", "concept"]).reset_index(drop=True)
+    renamed = pd.DataFrame({"original": list(cfg.rename_concepts), "released_as": list(cfg.rename_concepts.values())})
+    drugs = concept_coverage_released(out_root, name, drugs=True, min_share=min_share)
+    return {"kept": kept, "removed": removed, "renamed": renamed, "drugs": drugs}

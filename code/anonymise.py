@@ -53,6 +53,13 @@ SITES = ("GOSH", "RBH", "SMH")
 # Concepts recorded at one site only that are proposed for removal in the pooled release (anonymisation_design.md, 2026-11-20): three have a
 # near-identical common concept, `ps_peep` is a set inspiratory pressure (not a PEEP), `compliance_dynamic` can be derived at every site.
 ONE_SITE_DROP = ("pulse_rate", "resp_rate_monitor", "bg_base_excess_recorded", "ps_peep", "compliance_dynamic")
+# Concepts not usable at all three sites (in the concept map ten have a source at one site only, nine at two sites, and `bg_sample_type` at
+# three but too little data at one; `intake_iv` is a derived fluid concept with no GOSH source). The "common features only" release leaves
+# them out. SITE_PATTERN_DROP: two concepts dropped by hand because they gave the site away (`inr`, `cardiac_rhythm`). Used by `level_report.release_manifest` to say why a concept was removed; the level's own
+# `drop_concepts` is what actually removes them, and is stored in its config.json.
+FEW_SITES = ("bg_venous_sat", "avpu", "bg_cvo2", "ett_cuff", "ett_depth", "ett_route", "gcs", "inhaled_no", "plateau_pressure", "temp_peripheral",
+             "bg_hct", "bg_sample_type", "chloride", "crt", "cvp", "insp_time", "intake_iv", "pupil_reaction", "pupil_size", "urine_output")
+SITE_PATTERN_DROP = ("inr", "cardiac_rhythm")
 
 
 # --------------------------------------------------------------------------------------------------------------------------------

@@ -377,6 +377,10 @@ def test_value_report():
     by = H.concept_by_age(tmp / "h", static, "hr")
     figs = LR.site_figures(tmp / "out", "tier2", static, {"drop one": [top]}, by, tmp / "figs")
     assert all(p.exists() and p.stat().st_size > 5000 for p in figs.values()) and len(figs) == 4
+    man = LR.release_manifest(tmp / "out", "tier2")
+    assert {"kept", "removed", "renamed", "drugs"} == set(man) and "hr" in set(man["kept"]["concept"])
+    assert set(man["kept"]["kind"]) <= {"numeric", "text", "both"} and man["kept"]["n_sites"].between(0, 3).all()
+    assert set(man["removed"]["concept"]) == set(A.ONE_SITE_DROP) and (man["removed"]["reason"] == "one site only").all()
     imp = LR.concept_importance(tmp / "out", "tier2", static, repeats=1)
     assert list(imp.columns) == ["all", "values", "pattern"] and len(imp) > 0
     assert imp["all"].is_monotonic_decreasing
