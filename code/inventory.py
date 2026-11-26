@@ -311,7 +311,10 @@ def id_overlap(inv, base="ai_picu_demographics.csv"):
 
 
 DATE_NAME = re.compile(r"date|time|dttm|dob|birth", re.I)
-DIRECT_NAME = re.compile(r"name|nhs|mrn|hospital.?n|dob|birth|post.?code|address|phone|email|surname", re.I)
+# A name column must be a person's name (patient_name, FirstName), not any column containing "name"
+# (drug_name, TemplateName, "Unnamed: 0"); "dob" must stand alone, so DOBUTAMINE is not flagged.
+DIRECT_NAME = re.compile(r"(?<![a-z])(?:patient|first|last|sur|given|full|family|fore|mother|father|parent)_?name"
+                         r"|nhs|mrn|hospital.?n|(?<![a-z])dob(?![a-z])|birth|post.?code|address|phone|email", re.I)
 # "age" only at the start of a word (Age, AgeDays, Age_mth), so "Dosage" is not flagged
 QUASI_NAME = re.compile(r"(?<![a-z])[Aa]ge|(?i:sex|gender|ethnic|weight|diagnos|death|deceased|died)")
 TEXT_NAME = re.compile(r"other|desc|note|comment|text|reason", re.I)
@@ -482,8 +485,8 @@ def key_table(inv):
 
 def rows_by_year(inv, csv_dir=None, min_year=1990):
     """Rows per calendar year for each file, by its main time column (the parsed date column with
-    distinct days, so a measurement time beats a stay-level time such as WARD_IN that repeats on every
-    row; time-of-day-only and placeholder-date columns are skipped). Reads one column per
+    distinct timestamps, so a measurement time (hundreds of thousands of values) beats a stay-level time
+    such as WARD_IN that repeats on every row of a stay; time-of-day-only and placeholder-date columns are skipped). Reads one column per
     file. Returns a table: rows = (file, column), columns = years. A file whose rows collapse after
     some date (a system changeover) shows here."""
     csv_dir = Path(csv_dir or inv["csv_dir"]).expanduser()
@@ -495,7 +498,8 @@ def rows_by_year(inv, csv_dir=None, min_year=1990):
         d = d[~d["note"].fillna("").str.contains("placeholder|time of day")]
     out = []
     for fn, g in d.groupby("file"):
-        col = g.sort_values(["distinct days", "non-missing"], ascending=False).iloc[0]["column"]
+        uniq = dict(zip(inv["profiles"][fn]["column"], inv["profiles"][fn]["unique"]))
+        col = max(g["column"], key=lambda c: uniq.get(c, 0))
         df, _ = read(csv_dir / fn, usecols=[col])
         p = parse_dates(df[col])[0].dropna()
         for y, n in p[p.dt.year >= min_year].dt.year.value_counts().items():
@@ -506,9 +510,10 @@ def rows_by_year(inv, csv_dir=None, min_year=1990):
                                           values="rows", fill_value=0).sort_index())
 
 
-def find_gaps(by_year, frac=0.5, min_rows=1000):
+def find_gaps(by_year, frac=0.5, min_rows=1000, rise=1.5):
     """Years, strictly inside a file's first and last year, with fewer than `frac` of the file's
-    median yearly rows. The first and last years are partial and are not tested. Flags are
+    median yearly rows (a drop) or more than `rise` times it (a rise: a new system charting more often).
+    The first and last years are partial and are not tested. Flags are
     leads to explain (an Epic go-live, a pandemic year, an outage), not errors."""
     out = []
     for (fn, col), r in by_year.iterrows():
@@ -519,9 +524,10 @@ def find_gaps(by_year, frac=0.5, min_rows=1000):
         for y, n in r.loc[nz.index.min():nz.index.max()].items():
             if y in (nz.index.min(), nz.index.max()):
                 continue
-            if n < frac * typical:
+            if n < frac * typical or n > rise * typical:
                 out.append({"file": fn, "column": col, "year": y, "rows": int(n),
-                            "typical": int(typical), "share of typical": round(n / typical, 2)})
+                            "typical": int(typical), "share of typical": round(n / typical, 2),
+                            "change": "drop" if n < typical else "rise"})
     return pd.DataFrame(out)
 
 
