@@ -571,9 +571,14 @@ def test_delete_below_k_and_adversary_risk():
     assert r.loc["rogue insurer", "avg_risk"] <= r.loc["friendly researcher", "avg_risk"] + 1e-12
     assert r.loc["informed acquaintance (extension)", "k_min"] <= r.loc["friendly researcher", "k_min"]
     assert (r["final_risk"] <= r["p_access"] * r["p_attempt"] + 1e-12).all() and r["avg_risk"].between(0, 1).all()
-    assert abs(r.loc["friendly researcher", "p_attempt"] - PR.acquaintance_risk(t2.attrs["patients"], 12_000_000)) < 1e-12
+    assert abs(r.loc["friendly researcher", "p_attempt"] - PR.acquaintance_risk(t2.attrs["patients"], 14_403_544)) < 1e-12
     assert {"l1_certain", "l1_some_suppressed", "l_unknown"} <= set(t2.columns) and t2["l_min"].dropna().ge(1).all()
     assert t2.loc[t2["adversary"] == "rogue researcher", ["l1_certain", "l1_some_suppressed", "l_unknown"]].iloc[0].between(0, 1).all()
+    rt = PR.risk_table(tmp / "out", "tier2_k2", static)
+    assert list(rt.columns[:2]) == ["section", "item"] and set(r.index) <= set(rt.columns[2:])
+    fin = rt[rt["item"] == "P final risk"].iloc[0]
+    assert all(abs(float(fin[a]) - r.loc[a, "final_risk"]) < 1e-12 for a in r.index)
+    assert (rt.loc[rt["item"] == "Height", rt.columns[2:]] == "not in release").all().all()
     summ = PR.privacy_summary(tmp / "out", "tier2_k2", static, n_targets=60)
     assert set(summ["role"]) == {"gate", "reported", "informational"} and summ.loc[summ["role"] == "gate", "status"].isin(["pass", "fail"]).all()
     assert summ.loc[summ["test"] == "S2 known observations", "status"].iloc[0] == "-"
@@ -581,6 +586,50 @@ def test_delete_below_k_and_adversary_risk():
     assert set(both["level"]) == {"tier2_k2", "tier2_k2_keep"}
     cost = PR.suppression_cost(tmp / "out", ["tier2_k2", "tier2_k2_keep"])
     assert cost.loc[0, "deleted_below_k"] == n_del and cost.loc[1, "deleted_below_k"] == 0
+
+
+def test_enforce_l_diversity():
+    import patient_report as PR
+    # group A: 12 stays, all Cardiac; group B: 12 stays, Cardiac and Neuro; group C: 11 stays, all Neuro but one has the diagnosis suppressed
+    rows = ([("A%02d" % i, "1y", "M", "w1", 0, "Cardiac") for i in range(12)] + [("B%02d" % i, "2y", "M", "w1", 0, "Cardiac" if i % 2 else "Neuro") for i in range(12)]
+            + [("C%02d" % i, "5y", "F", "w1", 0, "Neuro" if i else "(suppressed)") for i in range(11)])
+    df = pd.DataFrame(rows, columns=["stay_key", "age_band", "sex", "weight_band", "died", "diagnosis_group"])
+    truth = df.drop(columns="diagnosis_group").copy()
+    out, rep = A.R.enforce_l_diversity(df, truth)
+    sup = out["diagnosis_group"] == "(suppressed)"
+    assert sup[out["stay_key"].str.startswith("A")].all() and sup[out["stay_key"].str.startswith("C")].all()
+    assert not sup[out["stay_key"].str.startswith("B")].any()
+    assert int(rep.set_index("item").loc["targets still with one known value", "n"]) == 0
+    # a suppressed weight band makes a stay a candidate of other groups, so their diagnoses are also hidden when they would reveal one value
+    # pipeline: min_l = 2 leaves nobody with one known diagnosis for the risk-table adversaries
+    cfg = replace(T2, name="tier2_l2", k=2, delete_below_k=True, min_l=2, seed=6)
+    tmp, static, steps, checks = run_level(cfg)
+    assert (steps["step"] == "static: l-diversity").any() and not checks[(checks["check"] == "l-diversity") & (checks["status"] == "FAIL")].shape[0]
+    t2 = PR.adversary_risk(tmp / "out", "tier2_l2", static)
+    assert (t2[["l1_certain", "l1_some_suppressed"]].dropna() == 0).all().all()
+
+
+def test_k_counts_patients():
+    import patient_report as PR
+    # a cell of 6 stays from 3 patients: fine for k = 5 by stays, not by patients
+    rows = [("S%d" % i, "gosh", "1y", "M", "w1", 0, "Cardiac", "P%d" % (i // 2)) for i in range(6)] + [("T%d" % i, "gosh", "2y", "M", "w1", 0, "Cardiac", "Q%d" % i) for i in range(8)]
+    df = pd.DataFrame(rows, columns=["stay_key", "site", "age_band", "sex", "weight_band", "died", "diagnosis_group", "_pid"])
+    key = ["age_band", "sex", "diagnosis_group", "died", "weight_band"]
+    by_stays, _ = A.R.suppress_to_k(df, key, ["weight_band"], k=5, by_site=False)
+    assert (by_stays["weight_band"] == "(suppressed)").sum() == 0
+    by_pat, _ = A.R.suppress_to_k(df, key, ["weight_band"], k=5, by_site=False, unit="_pid")
+    assert (by_pat["weight_band"] == "(suppressed)").sum() == 6        # the 1y cell has 6 stays but 3 patients; the 2y cell has 8 patients
+    assert not A.stays_below_k(df.drop(columns="_pid"), 5).any() and A.stays_below_k(df.drop(columns="_pid"), 5, df["_pid"]).sum() == 6
+    # pipeline: with k_unit = "patients" no cell has fewer than k different patients (the synthetic stays come in pairs of one patient)
+    cfg = replace(T2, name="tier2_kp", k=3, k_unit="patients", delete_below_k=True, seed=8)
+    tmp, static, steps, checks = run_level(cfg)
+    st = pd.read_parquet(tmp / "out" / "tier2_kp" / "static.parquet")
+    pid = pd.Series(PR.LR.labels(tmp / "out", "tier2_kp", static, st["stay_key"].astype(str).tolist())[1], index=st.index)
+    assert not A.stays_below_k(st, 3, pid).any()
+    t2 = PR.adversary_risk(tmp / "out", "tier2_kp", static)
+    assert {"k_min_stays", "share_below_10"} <= set(t2.columns) and (t2["k_min"] <= t2["k_min_stays"]).all()
+    s2 = PR.adversary_risk(tmp / "out", "tier2_kp", static, unit="stays")
+    assert (s2["k_min"] == t2["k_min_stays"]).all()
 
 
 def test_suppress_outcome_blind():

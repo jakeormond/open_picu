@@ -176,12 +176,21 @@ WEIGHT_COARSE = [0, 5, 10, 20, 40, np.inf]
 LOS_COARSE = [0, 24, 72, 240, np.inf]
 
 
-def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)", by_site=True, spread=()):
+def cell_size(frame, cols, by_site=False, unit=None):
+    """Size of the cell of each row: stays that share the values of `cols` (and the site if by_site), or, if `unit` names a column (a patient
+    identifier), the number of different units (patients) in the cell. Missing counts as a value."""
+    keys = ([frame["site"]] if by_site else []) + [frame[c].astype("string").fillna("(missing)") for c in cols]
+    g = frame.groupby(keys)
+    return g[unit].transform("nunique") if unit else g["stay_key"].transform("size")
+
+
+def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)", by_site=True, spread=(), unit=None):
     """Local suppression: stays are all kept; for stays whose combination of `key_cols` is shared by fewer than k stays at their site, one
     field at a time (in `order`, least valuable first) is replaced by `token`, recomputing the cells after each field, until no stay is in a
     cell below k or the fields are used up. by_site=True counts cells within each site (the site is a visible column); by_site=False counts
     them across all sites (the site column is not released). Returns (frame, report): per field the number of values suppressed, and at the end the stays
     still in cells below k. Counts only. A field in `order` that is not in `key_cols` is still suppressed when it is listed.
+    unit: None counts stays in a cell; the name of a patient-identifier column counts the different patients, so two stays of one child do not make a cell of two.
     spread: key columns that do not decide *which* stays are suppressed (for example ("died",)). A stay is suppressed when any stay that shares
     its other key columns is in a small cell, so the suppressed token is not carried only by the rarer value of the spread column. Without it,
     the stays suppressed for being in a small (..., died) cell are nearly all deaths, and "(suppressed)" then tells the outcome."""
@@ -189,7 +198,7 @@ def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)", by_site=T
     rows = []
     for f in order:
         cols = [c for c in key_cols if c in out.columns]
-        size = out.groupby(([out["site"]] if by_site else []) + [out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
+        size = cell_size(out, cols, by_site, unit)
         small = size < k
         if spread and small.any():
             rest = [c for c in cols if c not in spread]
@@ -199,9 +208,61 @@ def suppress_to_k(coarse, key_cols, order, k=10, token="(suppressed)", by_site=T
             out[f] = out[f].astype("string").mask(small, token)
         rows.append({"field": f, "values_suppressed": int(small.sum()) if f in out.columns else 0})
     cols = [c for c in key_cols if c in out.columns]
-    size = out.groupby(([out["site"]] if by_site else []) + [out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
+    size = cell_size(out, cols, by_site, unit)
     rows.append({"field": "(stays still below k)", "values_suppressed": int((size < k).sum())})
     return out, pd.DataFrame(rows)
+
+
+# What the adversaries of the risk table (patient_report.ADVERSARIES) know; the l-diversity rule below protects against each of them.
+L_KNOWN_SETS = (("sex", "age_band", "weight_band", "died"), ("sex", "age_band", "died"))
+
+
+def _l_candidates(released, truth, known, sensitive, token):
+    """For every stay taken as the target (true values of `known` from `truth`): the stays it cannot be told from in the release (a suppressed
+    value matches anything), as a list of (rows of the targets, boolean mask of the candidates) per distinct true combination, and the number
+    of different known values of `sensitive` among the candidates."""
+    cols = [c for c in known if c in released.columns]
+    n = len(released)
+    rel = {c: released[c].astype("string").fillna("(missing)").to_numpy(dtype=object) for c in cols}
+    tru = {c: truth[c].astype("string").fillna("(missing)").to_numpy(dtype=object) for c in cols}
+    codes, uniq = pd.factorize(pd.Series(list(zip(*[tru[c] for c in cols]))))
+    sv = released[sensitive].astype("string").fillna("(missing)").to_numpy(dtype=object)
+    sc, _ = pd.factorize(pd.Series(sv))
+    sw = sv == token
+    for i, u in enumerate(uniq):
+        m = np.ones(n, dtype=bool)
+        for j, c in enumerate(cols):
+            m &= (rel[c] == u[j]) | (rel[c] == token)
+        yield np.flatnonzero(codes == i), m, len(np.unique(sc[m & ~sw]))
+
+
+def enforce_l_diversity(released, truth, known_sets=L_KNOWN_SETS, sensitive="diagnosis_group", token="(suppressed)", max_iter=10):
+    """l-diversity of at least 2 for `sensitive` (the minimum of AmsterdamUMCdb). For each adversary in `known_sets`, every stay is a target
+    and its candidates are the released stays that fit what the adversary knows (a suppressed value fits anything). If the candidates show
+    exactly one known value of `sensitive` (the value is certain, or very likely when some candidates are suppressed), the sensitive field
+    is suppressed for all the candidates, so the adversary learns nothing about it. Repeated until no target is left with one value, as
+    suppressing changes other targets' candidates. `truth` has the true values of the known columns, one row per stay_key (before suppression).
+    Returns (frame, report): report rows are the stays suppressed, the rounds used and the targets still with one value (0 when done)."""
+    out = released.copy()
+    tr = out[["stay_key"]].merge(truth.drop_duplicates("stay_key"), on="stay_key", how="left")
+    total, rounds, left = 0, 0, 0
+    for _ in range(max_iter + 1):
+        bad = np.zeros(len(out), dtype=bool)
+        n_bad = 0
+        for known in known_sets:
+            for rows, m, l in _l_candidates(out, tr, known, sensitive, token):
+                if l == 1:
+                    bad |= m
+                    n_bad += len(rows)
+        left = n_bad
+        new = bad & (out[sensitive].astype("string") != token).fillna(True).to_numpy()
+        if not n_bad or _ == max_iter:
+            break
+        out.loc[bad, sensitive] = token
+        total += int(new.sum())
+        rounds += 1
+    return out, pd.DataFrame([{"item": f"{sensitive} suppressed for l >= 2", "n": total}, {"item": "rounds", "n": rounds},
+                              {"item": "targets still with one known value", "n": left}])
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------

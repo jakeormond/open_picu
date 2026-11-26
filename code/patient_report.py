@@ -21,6 +21,7 @@ Tests
   known_observation_attack(out_root, name)     S2 (and S1 as the m = 0 row): how many released stays fit m known observations
   repeat_stay_linkage(out_root, name, static)  S3: can the nearest stay in the same split group be a sibling stay of the same patient
   adversary_risk(out_root, name, static)       Table 2 of Thoral et al.: k, l, average and maximum risk and final risk per adversary
+  risk_table(out_root, name, static)           the same, laid out like Table 2 of Thoral et al. (for the data descriptor)
   risk_by_level(out_root, names, static)       the same for several levels (for example k = 2, 5, 10);  suppression_cost(out_root, names)
   privacy_summary(out_root, name, static)      all tests in one table: gate (Table 2), reported (S3, S4), informational (S2)
 
@@ -326,7 +327,7 @@ ADVERSARIES = {
 
 def acquaintance_risk(n_patients, population, friends=150):
     """P(an adversary knows at least one patient in the data) = 1 - (1 - rho)^friends, rho = patients / population (Dunbar's 150 friends, as in
-    Thoral et al.). `population` is the number of people the patients are drawn from: replace the default in `adversary_risk` by a sourced figure."""
+    Thoral et al.). `population` is the number of people the patients are drawn from: the default in `adversary_risk` is the UK population under 18 (14,403,544, UNICEF data portal, 2023)."""
     return float(1.0 - (1.0 - n_patients / population) ** friends)
 
 
@@ -345,14 +346,16 @@ def _released_and_truth(out_root, name, static):
     coarse["new_stay_key"] = co["new_stay_key"].to_numpy()
     truth = st[["stay_key"]].astype(str).merge(coarse.drop(columns=["stay_key"]).rename(columns={"new_stay_key": "stay_key"}), on="stay_key", how="left")
     n_pat = int(co.drop_duplicates(["site", "patient_id"]).shape[0]) if "patient_id" in co.columns else len(co)
-    return cfg, st, truth, n_pat
+    pid = LR.labels(out_root, name, static, st["stay_key"].astype(str).tolist())[1]
+    return cfg, st, truth, n_pat, pid
 
 
-def _candidates(st, truth, known, sensitive=None, token="(suppressed)"):
+def _candidates(st, truth, known, sensitive=None, token="(suppressed)", pid=None):
     """For every released stay taken as the target: how many released stays the attacker cannot tell from it (candidates), how many different
     values of `sensitive` those candidates show (suppressed values are not counted; 0 if all are suppressed), and how many candidates have the
     value suppressed. The attacker knows the target's true values of `known`; a released value equal to the true one or equal to `token`
-    (suppressed, so it could be anything) keeps a stay a candidate. Returns (candidates, distinct values, suppressed candidates, columns)."""
+    (suppressed, so it could be anything) keeps a stay a candidate. `pid`: a patient identifier per stay; the number of different patients among the
+    candidates is also returned. Returns (candidate stays, distinct values, suppressed candidates, candidate patients, columns)."""
     cols = [c for c in known if c in st.columns]
     n = len(st)
     rel = {c: st[c].astype("string").fillna("(missing)").to_numpy(dtype=object) for c in cols}
@@ -360,6 +363,8 @@ def _candidates(st, truth, known, sensitive=None, token="(suppressed)"):
     wild = {c: rel[c] == token for c in cols}
     codes, uniq = pd.factorize(pd.Series(list(zip(*[tru[c] for c in cols]))))
     cand = np.zeros(n)
+    pat = np.zeros(n)
+    pcode = pd.factorize(pd.Series(pid))[0] if pid is not None else None
     lval = np.full(n, np.nan)
     nsup = np.full(n, np.nan)
     has_s = bool(sensitive and sensitive in st.columns)
@@ -373,20 +378,24 @@ def _candidates(st, truth, known, sensitive=None, token="(suppressed)"):
             m &= (rel[c] == u[j]) | wild[c]
         sel = codes == i
         cand[sel] = int(m.sum())
+        pat[sel] = len(np.unique(pcode[m])) if pcode is not None else int(m.sum())
         if has_s:
             lval[sel] = len(np.unique(sc[m & ~sw]))
             nsup[sel] = int((m & sw).sum())
-    return cand, lval, nsup, cols
+    return cand, lval, nsup, pat, cols
 
 
-def adversary_risk(out_root, name, static, adversaries=None, population=12_000_000, threshold=0.05, token="(suppressed)"):
+def adversary_risk(out_root, name, static, adversaries=None, population=14_403_544, threshold=0.05, token="(suppressed)", unit="patients"):
     """AmsterdamUMCdb's Table 2 for one level: for each adversary, what they are assumed to know, k-anonymity, l-diversity, average and
     maximum re-identification risk, and the final risk = P(access) x P(attempt) x P(re-identification), the average risk or the maximum risk
     as the adversary's type says. Every released stay is a target; its candidates are the released stays that match the true values the
     adversary knows, with a suppressed value matching anything (the NULL rule of Ciglic et al.). Rows:
-      k_min, k_median       candidates of the least and the typical target (k-anonymity);
+      k_min, k_median       candidates of the least and the typical target (k-anonymity), counted in `unit`: "patients" (default; two stays of one
+                            child count once, as the child is found if both fit) or "stays"; k_min_stays is always the count in stays, and
+                            share_below_10 the share of targets with fewer than 10 candidates in that unit;
       l_min, l_median       different values of the sensitive attribute (diagnosis group) among the candidates, suppressed values not counted
-                            (l-diversity; l_min is at least 1);
+                            (l-diversity). l_min is the smallest over the targets with at least one known value; targets whose candidates are all
+                            suppressed learn nothing and are counted in l_unknown instead;
       l1_certain            share of stays whose candidates all show one diagnosis group and none is suppressed: the diagnosis is known;
       l1_some_suppressed    share whose candidates show one group and some are suppressed: the diagnosis is very likely that group;
       l_unknown             share whose candidates are all suppressed: nothing is learned (this, not disclosure, is what the floor at 1 hides);
@@ -394,25 +403,66 @@ def adversary_risk(out_root, name, static, adversaries=None, population=12_000_0
       p_access, p_attempt   the assumptions (see ADVERSARIES; `acquaintance` = `acquaintance_risk(patients, population)`);
       final_risk, ok        the product, and whether it is at most `threshold` (0.05 in the paper's range of 0.05 to 0.10).
     Not in the release, so not used: height, admission date and number of ICU admissions (the paper's rogue insurer knows the last; repeat
-    stays are tested as S3, `repeat_stay_linkage`). `population`: the people the patients are drawn from; the default is a placeholder, so
-    replace it by a sourced figure before quoting the friendly researcher's number. Counts, shares and probabilities only."""
-    cfg, st, truth, n_pat = _released_and_truth(out_root, name, static)
+    stays are tested as S3, `repeat_stay_linkage`). `population`: the people the patients are drawn from; the default is the UK population under 18 (14,403,544; UNICEF data portal, 2023), so
+    cross-check it against the ONS mid-year estimates before quoting the friendly researcher's number. Counts, shares and probabilities only."""
+    assert unit in ("patients", "stays")
+    cfg, st, truth, n_pat, pid = _released_and_truth(out_root, name, static)
     acq = acquaintance_risk(n_pat, population)
     rows = []
     for adv, (known, kind, p_access, p_attempt, sens) in (adversaries or ADVERSARIES).items():
-        cand, lval, nsup, cols = _candidates(st, truth, known, sens, token)
+        cand_stays, lval, nsup, pat, cols = _candidates(st, truth, known, sens, token, pid)
+        cand = pat if unit == "patients" else cand_stays
         pa = acq if p_attempt == "acquaintance" else float(p_attempt)
         avg, mx = float(np.mean(1.0 / cand)), float(1.0 / cand.min())
         p_re = avg if kind == "average" else mx
         final = p_access * pa * p_re
-        rows.append({"adversary": adv, "knows": ", ".join(cols), "risk_type": kind, "k_min": int(cand.min()), "k_median": float(np.median(cand)),
-                     "l_min": float(max(np.nanmin(lval), 1)) if sens else np.nan, "l_median": float(np.nanmedian(lval)) if sens else np.nan,
+        rows.append({"adversary": adv, "knows": ", ".join(cols), "risk_type": kind, "k_min": int(cand.min()), "k_median": float(np.median(cand)), "k_min_stays": int(cand_stays.min()),
+                     "share_below_10": float((cand < 10).mean()),
+                     "l_min": (float(np.nanmin(lval[lval >= 1])) if (lval >= 1).any() else np.nan) if sens else np.nan, "l_median": float(np.nanmedian(lval)) if sens else np.nan,
                      "l1_certain": float(((lval == 1) & (nsup == 0)).mean()) if sens else np.nan,
                      "l1_some_suppressed": float(((lval == 1) & (nsup > 0)).mean()) if sens else np.nan,
                      "l_unknown": float((lval == 0).mean()) if sens else np.nan,
                      "avg_risk": avg, "max_risk": mx, "p_access": p_access, "p_attempt": pa, "final_risk": final, "ok": bool(final <= threshold)})
     out = pd.DataFrame(rows)
-    out.attrs.update(level=name, k=cfg.k, stays=len(st), patients=n_pat, population=population, threshold=threshold)
+    out.attrs.update(level=name, k=cfg.k, stays=len(st), patients=n_pat, population=population, threshold=threshold, unit=unit)
+    return out
+
+
+_KNOWN_LABELS = {"sex": "Gender", "age_band": "Age", "weight_band": "Weight", "died": "Survival at discharge",
+                 "ethnicity": "Ethnicity (extension)", "diagnosis_group": "Diagnosis group (extension)"}
+
+
+def risk_table(out_root, name, static, **kw):
+    """`adversary_risk` laid out like Table 2 of Thoral et al.: one column per adversary; rows for what the adversary is assumed to know, P(access),
+    P(intention) (our P(attempt)), the average risk (P(re-identification), k-anonymity and l-diversity, medians over the stays), the maximum risk (the
+    same, with the smallest k and l) and the final risk (the average or the maximum risk, as each adversary's type says). Height, admission date and
+    number of ICU admissions are the paper's assumed knowledge that our release does not contain. `kw` goes to `adversary_risk` (population, threshold,
+    unit, adversaries). The friendly researcher's P(intention) depends on `population`: quote it only with a sourced figure."""
+    t = adversary_risk(out_root, name, static, **kw)
+    rows = []
+
+    def add(section, item, vals):
+        rows.append({"section": section, "item": item, **dict(zip(t["adversary"], vals))})
+
+    knows = [set(k.split(", ")) for k in t["knows"]]
+    for col, lab in _KNOWN_LABELS.items():
+        if any(col in k for k in knows):
+            add("Assumed background knowledge", lab, ["X" if col in k else "" for k in knows])
+    for lab in ("Height", "Admission date", "Number of ICU admissions"):
+        add("Assumed background knowledge", lab, ["not in release"] * len(t))
+    add("Assessment of reidentification risk", "P(access)", list(t["p_access"]))
+    add("Assessment of reidentification risk", "P(intention)", list(t["p_attempt"]))
+    add("Average risk", "P(reidentification)", list(t["avg_risk"]))
+    add("Average risk", "k-anonymity (median)", list(t["k_median"]))
+    add("Average risk", "l-diversity (median)", list(t["l_median"]))
+    add("Maximum risk", "P(reidentification)", list(t["max_risk"]))
+    add("Maximum risk", "k-anonymity (smallest)", list(t["k_min"]))
+    add("Maximum risk", "l-diversity (smallest)", list(t["l_min"]))
+    add("Maximum risk", "(ours) share of stays with every candidate diagnosis suppressed", list(t["l_unknown"]))
+    add("P final risk", "risk type used", list(t["risk_type"]))
+    add("P final risk", "P final risk", list(t["final_risk"]))
+    out = pd.DataFrame(rows)
+    out.attrs.update(t.attrs)
     return out
 
 
@@ -449,7 +499,7 @@ def suppression_cost(out_root, names, token="(suppressed)"):
     return pd.DataFrame(rows)
 
 
-def privacy_summary(out_root, name, static, n_targets=300, population=12_000_000, threshold=0.05, p_attempt_link=0.10):
+def privacy_summary(out_root, name, static, n_targets=300, population=14_403_544, threshold=0.05, p_attempt_link=0.10):
     """One table for a level: every test in the form of the Thoral et al. final-risk table. Columns: test, adversary, measure, value, p_access,
     p_attempt, final_risk, role, status. `role` is what the test is for:
       gate           Table 2 rows (`adversary_risk`): final risk against `threshold`; status pass or fail;

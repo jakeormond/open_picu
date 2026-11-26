@@ -104,6 +104,11 @@ class Config:
                            `patient_report.adversary_risk`); raise it when the cost is small.
     text_k                 Tier 2 free-text rule: a `value_text` or `value_raw` string seen in fewer than this many stays at a site and concept is
                            'rare' (replaced). Kept apart from `k` so that a low k for the static table does not weaken it. Default 10.
+    k_unit                 Tier 2: what k counts. "stays" (default) counts stays in a cell; "patients" counts different patients, so two stays of one
+                           child do not make a cell of two (the child would be found). Applies to suppression, deletion and the small-cell check.
+    min_l                  Tier 2: 1 (off) or 2. With 2, after local suppression and deletion, the diagnosis group is suppressed wherever candidates
+                           of one of the risk-table adversaries (`reid.L_KNOWN_SETS`) would otherwise all show the same diagnosis group
+                           (`reid.enforce_l_diversity`); the minimum l-diversity of AmsterdamUMCdb. Needs the diagnosis group in the level.
     delete_below_k         after local suppression, delete the stays that are still in a cell below k from the level altogether (static, series,
                            drugs, key map), as AmsterdamUMCdb did. The number deleted is logged ("static: stays deleted below k").
     max_small_share        Tier 2 static check: largest accepted share of stays in cells below k (None: report only)."""
@@ -111,6 +116,8 @@ class Config:
     k: int = 10
     text_k: int = 10
     delete_below_k: bool = False
+    k_unit: str = "stays"
+    min_l: int = 1
     seed: int = 1
     site_column: bool = True
     patient_key: str = "key"
@@ -165,6 +172,12 @@ class Config:
             bad.append("time_resolution_hours must be positive")
         if self.one_row_per_hour and not self.time_resolution_hours:
             bad.append("one_row_per_hour needs time_resolution_hours")
+        if self.k_unit not in ("stays", "patients"):
+            bad.append("k_unit must be 'stays' or 'patients'")
+        if self.min_l not in (1, 2):
+            bad.append("min_l must be 1 (off) or 2")
+        if self.min_l == 2 and (self.static_mode != "coarse" or "diagnosis_group" in self.drop_static):
+            bad.append("min_l=2 needs static_mode='coarse' and the diagnosis group in the level")
         if self.k < 2:
             bad.append("k must be at least 2")
         unknown = [f for f in self.drop_static if f not in DROPPABLE]
@@ -387,10 +400,19 @@ def make_keys(co, cfg, ids):
 # --------------------------------------------------------------------------------------------------------------------------------
 # Static table
 # --------------------------------------------------------------------------------------------------------------------------------
-def build_static(co, km, cfg):
+def patient_ids(co):
+    """site, stay_key and `_pid`, an identifier of the patient (site and patient_id; a stay with no patient_id counts as its own patient)."""
+    pid = co["patient_id"].astype("string") if "patient_id" in co.columns else pd.Series(pd.NA, index=co.index, dtype="string")
+    own = "stay:" + co["stay_key"].astype("string")
+    pid = co["site"].astype("string") + ":" + pid.where(pid.notna() & (pid.str.strip() != ""), own)
+    return pd.DataFrame({"site": co["site"], "stay_key": co["stay_key"], "_pid": pid})
+
+
+def build_static(co, km, cfg, return_truth=False):
     """The static table at this level, and a list of log rows. Tier 1 (exact): original fields with new keys. Tier 2 (coarse): bands,
     broad ethnicity groups, split_group, local suppression across all sites (`by_site=False`), then no site column."""
     log = []
+    truth = None
     if cfg.static_mode == "exact":
         s = co.merge(km, on=["site", "stay_key"], how="inner")
         s["stay_key"] = s["new_stay_key"]
@@ -401,7 +423,13 @@ def build_static(co, km, cfg):
         gone = dropped_static_columns(cfg)
         key_cols = [c for c in ["age_band", "sex", "ethnicity", "diagnosis_group", "died", "weight_band"] if c not in gone]
         order = [c for c in cfg.suppress_order if c not in gone]
-        coarse, rep = R.suppress_to_k(coarse, key_cols, order, k=cfg.k, by_site=False, spread=("died",) if cfg.suppress_outcome_blind else ())
+        truth = coarse.copy()
+        unit = None
+        if cfg.k_unit == "patients":
+            coarse = coarse.merge(patient_ids(co), on=["site", "stay_key"], how="left")
+            unit = "_pid"
+        coarse, rep = R.suppress_to_k(coarse, key_cols, order, k=cfg.k, by_site=False, spread=("died",) if cfg.suppress_outcome_blind else (), unit=unit)
+        coarse = coarse.drop(columns=["_pid"], errors="ignore")
         for r in rep.itertuples():
             log.append({"step": "static: local suppression", "item": r.field, "n": int(r.values_suppressed)})
         out = coarse.merge(co[["site", "stay_key", "pim"]], on=["site", "stay_key"], how="left")
@@ -416,7 +444,12 @@ def build_static(co, km, cfg):
         if str(out[c].dtype) == "category":
             out[c] = out[c].astype("string")
     log.append({"step": "static: rows", "item": "stays", "n": len(out)})
-    return out.sort_values("stay_key").reset_index(drop=True), log
+    out = out.sort_values("stay_key").reset_index(drop=True)
+    if return_truth:
+        if truth is not None:
+            truth = truth.merge(km[["site", "stay_key", "new_stay_key"]], on=["site", "stay_key"], how="inner").drop(columns="stay_key").rename(columns={"new_stay_key": "stay_key"})
+        return out, log, truth
+    return out, log
 
 
 # --------------------------------------------------------------------------------------------------------------------------------
@@ -593,22 +626,25 @@ def check_text_counts(df, scope, k):
 QUASI = ["age_band", "sex", "ethnicity", "diagnosis_group", "died", "weight_band"]
 
 
-def check_small_cells(static_out, cfg):
-    """Tier 2 static: stays in cells below k on the released quasi-identifiers (all sites together), against `max_small_share`."""
+def check_small_cells(static_out, cfg, unit=None):
+    """Tier 2 static: stays in cells below k on the released quasi-identifiers (all sites together), against `max_small_share`. With `unit` (a
+    Series of patient identifiers aligned with the table) k counts different patients."""
     cols = [c for c in QUASI + (["pim_band"] if "pim_band" in static_out.columns else []) if c in static_out.columns]
-    size = static_out.groupby([static_out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
-    n = int((size < cfg.k).sum())
+    n = int(stays_below_k(static_out, cfg.k, unit).sum())
     share = n / max(len(static_out), 1)
     ok = cfg.max_small_share is None or share <= cfg.max_small_share
     note = f"{share:.4%} of {len(static_out)} stays in cells below {cfg.k} on {','.join(cols)}; threshold " + ("none (report only)" if cfg.max_small_share is None else f"{cfg.max_small_share:.4%}")
     return [_chk("small cells", "static", n, ok, note)]
 
 
-def stays_below_k(static_out, k):
-    """Boolean Series: stays whose combination of released quasi-identifiers (as in `check_small_cells`) is shared by fewer than k stays."""
+def stays_below_k(static_out, k, unit=None):
+    """Boolean Series: stays whose combination of released quasi-identifiers (as in `check_small_cells`) is shared by fewer than k stays, or, if
+    `unit` (a Series of patient identifiers aligned with `static_out`) is given, by fewer than k different patients."""
     cols = [c for c in QUASI + (["pim_band"] if "pim_band" in static_out.columns else []) if c in static_out.columns]
-    size = static_out.groupby([static_out[c].astype("string").fillna("(missing)") for c in cols])["stay_key"].transform("size")
-    return size < k
+    f = static_out[cols + ["stay_key"]].copy()
+    if unit is not None:
+        f["_pid"] = unit.to_numpy()
+    return R.cell_size(f, cols, False, "_pid" if unit is not None else None) < k
 
 
 def split_group_report(static_out):
@@ -669,9 +705,13 @@ def run(harmonised_dir, static, out_root, cfg, sites=SITES, reports_dir=None, ex
     km.to_parquet(private / f"{cfg.name}_key_map.parquet", index=False)
     steps.append({"step": "keys", "item": "stay keys", "n": len(km)})
 
-    st, log = build_static(co, km, cfg)
+    st, log, truth = build_static(co, km, cfg, return_truth=True)
+    pidmap = None
+    if cfg.k_unit == "patients" and cfg.static_mode == "coarse":
+        pm = patient_ids(co).merge(km[["site", "stay_key", "new_stay_key"]], on=["site", "stay_key"])
+        pidmap = pm.set_index("new_stay_key")["_pid"]
     if cfg.delete_below_k and cfg.static_mode == "coarse":
-        gone = stays_below_k(st, cfg.k)
+        gone = stays_below_k(st, cfg.k, st["stay_key"].map(pidmap) if pidmap is not None else None)
         gone_keys = set(st.loc[gone, "stay_key"])
         n_pat = int(co.merge(km[km["new_stay_key"].isin(gone_keys)][["site", "stay_key"]], on=["site", "stay_key"]).drop_duplicates(["site", "patient_id"]).shape[0]) if "patient_id" in co.columns else 0
         km_gone = km[km["new_stay_key"].isin(gone_keys)][["site", "stay_key"]]
@@ -682,11 +722,17 @@ def run(harmonised_dir, static, out_root, cfg, sites=SITES, reports_dir=None, ex
         st = st[~gone].reset_index(drop=True)
         log.append({"step": "static: stays deleted below k", "item": "stays", "n": int(gone.sum())})
         log.append({"step": "static: stays deleted below k", "item": "patients with a stay deleted", "n": n_pat})
+    if cfg.min_l >= 2 and truth is not None:
+        st, lrep = R.enforce_l_diversity(st, truth)
+        for r in lrep.itertuples():
+            log.append({"step": "static: l-diversity", "item": r.item, "n": int(r.n)})
+        left = int(lrep.loc[lrep["item"] == "targets still with one known value", "n"].iloc[0])
+        checks.append(_chk("l-diversity", "static", left, left == 0, "targets whose candidates show exactly one diagnosis group (min_l = 2)"))
     steps += log + split_group_report(st)
     checks += check_frame(st, "static", cfg, ids, allowed_static(cfg), hour_limit, short_ids)
     checks.append(_chk("rows", "static", abs(len(st) - len(co)), len(st) == len(co), f"static rows {len(st)}, cohort stays {len(co)}"))
     if cfg.static_mode == "coarse":
-        checks += check_small_cells(st, cfg)
+        checks += check_small_cells(st, cfg, st["stay_key"].map(pidmap) if pidmap is not None else None)
     stop_if_failed()
     st.to_parquet(stage / "static.parquet", index=False)
     new_keys = set(st["stay_key"])

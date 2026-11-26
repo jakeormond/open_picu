@@ -17,8 +17,22 @@ Privacy / anonymisation planning:
     I.cross_site_columns({"RBH": rbh, "SMH": smh})   # column names shared by several sites
     (write_report includes both of the first two automatically.)
 
+Step 1 findings (what later steps must be told; counts and column names only):
+
+    by_year = I.rows_by_year(inv)                 # rows per file per calendar year
+    I.find_gaps(by_year)                          # years far below the file's usual level (era changes, outages)
+    I.key_table(inv)                              # candidate key columns per file
+    I.lookalike_files(inv)                        # old/new/merged copies of the same table (screening list)
+    paths = I.finalise(inv, "RBH", reports_dir, base="ai_picu_demographics.csv",
+                       rejected={"ai_picu_piccanet_old.csv": "reason"}, by_year=by_year)
+    cf = I.load_carried_forward(paths["carried_forward"])
+    I.check_columns(cf, frame.columns)            # later steps: free-text/direct-identifier names still present?
+
 No row-level data is returned. ID-like columns get counts only.
 """
+import difflib
+import itertools
+import json
 import re
 import time
 import warnings
@@ -251,6 +265,7 @@ def save_inventory(inv, path):
     """Pickle an inventory so it need not be rerun. It contains the ID values themselves
     (id_sets), so it is row-level data: save it only in the git-ignored derived/ folder."""
     import pickle
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as fh:
         pickle.dump(inv, fh)
 
@@ -300,6 +315,9 @@ DIRECT_NAME = re.compile(r"name|nhs|mrn|hospital.?n|dob|birth|post.?code|address
 # "age" only at the start of a word (Age, AgeDays, Age_mth), so "Dosage" is not flagged
 QUASI_NAME = re.compile(r"(?<![a-z])[Aa]ge|(?i:sex|gender|ethnic|weight|diagnos|death|deceased|died)")
 TEXT_NAME = re.compile(r"other|desc|note|comment|text|reason", re.I)
+# Quasi-identifiers that the final threat model (PRIVACY_THREAT_MODEL.md) uses: sex, age, weight, diagnosis
+# group, outcome. Ethnicity is also flagged but is not released in Tier 2.
+USED_QUASI = re.compile(r"(?<![a-z])[Aa]ge|(?i:sex|gender|weight|diagnos|death|deceased|died)")
 
 
 def _is_date_col(name, detail):
@@ -392,7 +410,8 @@ def identifier_audit(inv):
                     and (avg_len >= 20 or TEXT_NAME.search(col))):
                 flags.append("free text?")
             if QUASI_NAME.search(col):
-                flags.append("quasi-identifier")
+                flags.append("quasi-identifier (in threat model)" if USED_QUASI.search(col)
+                             else "quasi-identifier (not in threat model)")
             if str(r["detail"]).startswith("datetime") or DATE_NAME.search(col):
                 flags.append("date/time")
             if flags:
@@ -415,12 +434,14 @@ def cross_site_columns(invs):
     return df[(df > 0).sum(axis=1) > 1]
 
 
-def write_report(inv, site, out_path, base="ai_picu_demographics.csv", dates=None):
-    """Write the Markdown report, including the identifier flags and the date audit."""
+def write_report(inv, site, out_path, base="ai_picu_demographics.csv", dates=None, findings=None):
+    """Write the Markdown report, including the identifier flags and the date audit.
+    findings: Markdown from findings_text(), placed at the top."""
     if dates is None:
         dates = inv.get("dates")
     summ = inv["summary"]
     parts = [f"# Inventory: {site}", f"Generated {date.today()}", "",
+             *([findings, ""] if findings else []),
              "# Files at a glance", "",
              md_table(summ.to_dict("records"), list(summ.columns)), ""]
     for fn, prof in inv["profiles"].items():
@@ -435,3 +456,201 @@ def write_report(inv, site, out_path, base="ai_picu_demographics.csv", dates=Non
     if dates is not None and len(dates):
         parts += ["## Date and time columns", "", df_text(dates, index=False), ""]
     Path(out_path).write_text("\n".join(parts) + "\n")
+
+
+
+# ---------------------------------------------------------------------------
+# Step 1 findings: what the later steps must be told
+# ---------------------------------------------------------------------------
+
+def key_table(inv):
+    """Candidate key columns: every ID-like column in every file, with its unique count, missing
+    share, and whether it is unique per row. One row per (file, column). Lists the keys a site
+    offers, so a link that needs a special key (GOSH project_id) is visible at step 1."""
+    rows_per = inv["summary"].set_index("file")["rows"]
+    out = []
+    for fn, prof in inv["profiles"].items():
+        n = int(rows_per[fn])
+        for _, r in prof.iterrows():
+            if ID_HINT.search(r["column"]) and r["unique"] > 1:
+                non_missing = n * (1 - (r["missing %"] or 0) / 100)
+                out.append({"file": fn, "column": r["column"], "unique": r["unique"],
+                            "missing %": r["missing %"],
+                            "unique per row": bool(non_missing and r["unique"] >= 0.999 * non_missing)})
+    return pd.DataFrame(out)
+
+
+def rows_by_year(inv, csv_dir=None, min_year=1990):
+    """Rows per calendar year for each file, by its main time column (the parsed date column with
+    distinct days, so a measurement time beats a stay-level time such as WARD_IN that repeats on every
+    row; time-of-day-only and placeholder-date columns are skipped). Reads one column per
+    file. Returns a table: rows = (file, column), columns = years. A file whose rows collapse after
+    some date (a system changeover) shows here."""
+    csv_dir = Path(csv_dir or inv["csv_dir"]).expanduser()
+    d = inv["dates"]
+    if "earliest" not in d:
+        return pd.DataFrame()
+    d = d[d["earliest"].notna()]
+    if "note" in d:
+        d = d[~d["note"].fillna("").str.contains("placeholder|time of day")]
+    out = []
+    for fn, g in d.groupby("file"):
+        col = g.sort_values(["distinct days", "non-missing"], ascending=False).iloc[0]["column"]
+        df, _ = read(csv_dir / fn, usecols=[col])
+        p = parse_dates(df[col])[0].dropna()
+        for y, n in p[p.dt.year >= min_year].dt.year.value_counts().items():
+            out.append({"file": fn, "column": col, "year": int(y), "rows": int(n)})
+    if not out:
+        return pd.DataFrame()
+    return (pd.DataFrame(out).pivot_table(index=["file", "column"], columns="year",
+                                          values="rows", fill_value=0).sort_index())
+
+
+def find_gaps(by_year, frac=0.5, min_rows=1000):
+    """Years, strictly inside a file's first and last year, with fewer than `frac` of the file's
+    median yearly rows. The first and last years are partial and are not tested. Flags are
+    leads to explain (an Epic go-live, a pandemic year, an outage), not errors."""
+    out = []
+    for (fn, col), r in by_year.iterrows():
+        nz = r[r > 0]
+        if len(nz) < 3 or nz.median() < min_rows:
+            continue
+        typical = nz.median()
+        for y, n in r.loc[nz.index.min():nz.index.max()].items():
+            if y in (nz.index.min(), nz.index.max()):
+                continue
+            if n < frac * typical:
+                out.append({"file": fn, "column": col, "year": y, "rows": int(n),
+                            "typical": int(typical), "share of typical": round(n / typical, 2)})
+    return pd.DataFrame(out)
+
+
+NOISE = re.compile(r"(?:^|_)(?:old|new|archived?|copy|backup|final|v\d+|merged|flowsheet|rows|lab|variables?)(?=_|$)")
+
+
+def _stem(fn):
+    s = re.sub(NOISE, "", Path(fn).stem.lower())
+    return re.sub(r"_+", "_", s).strip("_")
+
+
+def _id_share(inv, a, b):
+    """Largest share, over ID columns the two files have in common, of the smaller file's IDs found in the other."""
+    A, B = inv["id_sets"].get(a, {}), inv["id_sets"].get(b, {})
+    best = 0.0
+    for c in set(A) & set(B):
+        if A[c] and B[c]:
+            best = max(best, len(A[c] & B[c]) / min(len(A[c]), len(B[c])))
+    return best
+
+
+def lookalike_files(inv, min_jaccard=0.3, min_id_overlap=0.9, min_row_ratio=0.8, family=2):
+    """Screening list of pairs of files that may be copies or versions of the same table:
+      (a) same name apart from old/new/merged/archive labels, with at least half the columns shared; or
+      (b) similar columns, nearly the same IDs and similar row counts, where neither file belongs to
+          a larger family of files with identical columns (one-file-per-variable exports are families).
+    Candidates to settle at step 2 (which file is right), not a verdict."""
+    cols = {fn: {c.strip().lower() for c in p["column"]} for fn, p in inv["profiles"].items()}
+    rows = inv["summary"].set_index("file")["rows"]
+    fam = {}
+    for p_fn, p in inv["profiles"].items():
+        fam.setdefault(tuple(p["column"]), []).append(p_fn)
+    fam = {fn: len(v) for v in fam.values() for fn in v}
+    out = []
+    for a, b in itertools.combinations(sorted(cols), 2):
+        jac = len(cols[a] & cols[b]) / len(cols[a] | cols[b])
+        ratio = min(rows[a], rows[b]) / max(rows[a], rows[b]) if max(rows[a], rows[b]) else 0
+        share = _id_share(inv, a, b)
+        if _stem(a) == _stem(b) and jac >= 0.5:
+            why = "same name apart from old/new/merged labels"
+        elif (jac >= min_jaccard and share >= min_id_overlap and ratio >= min_row_ratio
+              and fam[a] <= family and fam[b] <= family):
+            why = "similar columns, IDs and size"
+        else:
+            continue
+        out.append({"file A": a, "file B": b, "rows A": int(rows[a]), "rows B": int(rows[b]),
+                    "column overlap": round(jac, 2), "ID overlap": round(share, 2), "why": why})
+    return pd.DataFrame(out)
+
+
+def free_text_columns(inv):
+    """(file, column) pairs that identifier_audit flags as free text or as direct-identifier names."""
+    a = identifier_audit(inv)
+    if not len(a):
+        return pd.DataFrame(columns=["file", "column", "kind"])
+    a = a.assign(kind=a["flags"].map(lambda f: "direct-identifier name" if "direct-identifier" in f else
+                                     "free text?" if "free text?" in f else None)).dropna(subset=["kind"])
+    return a[["file", "column", "kind"]].reset_index(drop=True)
+
+
+def carried_forward(inv, site, rejected=None, excluded=None, notes=None):
+    """What steps 2 to 10 must honour, as plain lists (names only, no values):
+      free_text / direct_identifier: columns that must not reach a release;
+      lookalike_files: pairs to settle at step 2;
+      rejected_files: {file: reason} files known not to be used (their columns must not be released);
+      excluded_from_inventory: the exclude pattern used (those files were never profiled);
+      notes: free statements, e.g. a system changeover date."""
+    ft = free_text_columns(inv)
+    look = lookalike_files(inv)
+    return {"site": site, "date": str(date.today()),
+            "free_text": ft.loc[ft["kind"] == "free text?", ["file", "column"]].values.tolist(),
+            "direct_identifier": ft.loc[ft["kind"] != "free text?", ["file", "column"]].values.tolist(),
+            "lookalike_files": look[["file A", "file B", "why"]].values.tolist() if len(look) else [],
+            "rejected_files": dict(rejected or {}), "excluded_from_inventory": excluded,
+            "notes": list(notes or [])}
+
+
+def save_carried_forward(cf, path):
+    Path(path).write_text(json.dumps(cf, indent=1))
+
+
+def load_carried_forward(path):
+    return json.loads(Path(path).read_text())
+
+
+def check_columns(cf, columns):
+    """For later steps: which of `columns` (names in a harmonised or released table) have the name of
+    a column flagged as free text or as a direct identifier at step 1? Names only, case-insensitive."""
+    flagged = {c.strip().lower(): kind for kind in ("free_text", "direct_identifier")
+               for _, c in cf[kind]}
+    return [(c, flagged[c.strip().lower()]) for c in columns if c.strip().lower() in flagged]
+
+
+def findings_text(inv, site, base, by_year=None, rejected=None, notes=None, gaps=None):
+    """Markdown 'Findings' block for the top of the report."""
+    ft, look, keys = free_text_columns(inv), lookalike_files(inv), key_table(inv)
+    if gaps is None and by_year is not None and len(by_year):
+        gaps = find_gaps(by_year)
+    parts = [f"# Findings for later steps: {site}", "",
+             f"{len(inv['summary'])} files profiled; base file for ID overlap: {base}.", ""]
+    if notes:
+        parts += ["## Notes from the analyst", ""] + [f"- {n}" for n in notes] + [""]
+    if rejected:
+        parts += ["## Files known not to be used", ""] + [f"- {f}: {why}" for f, why in rejected.items()] + [""]
+    parts += ["## Files that look like copies or versions of one another (to settle at step 2)", "",
+              df_text(look, index=False) if len(look) else "none found", ""]
+    parts += ["## Candidate keys (ID-like columns)", "",
+              df_text(keys, index=False) if len(keys) else "none", ""]
+    parts += ["## Free-text and direct-identifier columns (must not reach a release)", "",
+              df_text(ft, index=False) if len(ft) else "none", ""]
+    if gaps is not None:
+        parts += ["## Years far below a file's usual level (era changes, gaps)", "",
+                  df_text(gaps, index=False) if len(gaps) else "none", ""]
+    if by_year is not None and len(by_year):
+        parts += ["## Rows per calendar year, by each file's main time column", "", df_text(by_year), ""]
+    return "\n".join(parts)
+
+
+def finalise(inv, site, out_dir, base="ai_picu_demographics.csv", by_year=None, rejected=None,
+             excluded=None, notes=None):
+    """Write the step 1 outputs for one site into out_dir (counts, shapes and column names only):
+      <SITE>_inventory_<date>.md   the full report, findings first;
+      <SITE>_carried_forward.json  the lists later steps check against (load_carried_forward).
+    Returns the two paths."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md = out_dir / f"{site}_inventory_{date.today()}.md"
+    js = out_dir / f"{site}_carried_forward.json"
+    write_report(inv, site, md, base=base,
+                 findings=findings_text(inv, site, base, by_year, rejected, notes))
+    save_carried_forward(carried_forward(inv, site, rejected, excluded, notes), js)
+    return {"report": md, "carried_forward": js}
