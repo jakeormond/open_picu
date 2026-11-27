@@ -227,3 +227,35 @@ def eligible_rows(df, manifest, site):
         return df[rbh_stay_key(df["studyID"]).isin(set(manifest["stay_key"]))]
     col = "encounterId" if "encounterId" in df.columns else "encounterID"
     return df[df[col].isin(set(manifest["encounterId"]))]
+
+
+# ---------------------------------------------------------------- checks against the recorded baseline
+# Waterfall counts recorded 2026-11-26 (BASELINE_manifest_waterfalls.md) before the step 1 and 2 rebuild.
+# Step order as returned by the three manifest functions.
+BASELINE = {
+    "RBH": [14792, 5112, 4789, 4765],
+    "SMH": [4047, 3709, 3709, 3699],
+    "GOSH": [10387, 9820, 9820, 9820, 9671],
+}
+
+
+def check_waterfall(steps, site, baseline=None):
+    """Compare a waterfall (from rbh/smh/gosh_manifest) with the recorded baseline, step by step.
+    Returns a table (step, baseline, now, same); raises AssertionError if any count differs."""
+    base = (baseline or BASELINE)[site.upper()]
+    now = [s["stays"] for s in steps]
+    out = pd.DataFrame({"step": [s["step"] for s in steps][:max(len(base), len(now))] +
+                        [""] * max(0, len(base) - len(now)),
+                        "baseline": base + [None] * max(0, len(now) - len(base)),
+                        "now": now + [None] * max(0, len(base) - len(now))})
+    out["same"] = out["baseline"] == out["now"]
+    assert out["same"].all(), f"{site} waterfall differs from the baseline:\n{out}"
+    return out
+
+
+def fingerprint(manifest, key_col):
+    """Number of stays and a short hash of the sorted stay keys (not reversible to a key). Recorded after a
+    run so a later run can show the same stays, not only the same count."""
+    import hashlib
+    keys = sorted(manifest[key_col].astype(str))
+    return {"stays": len(keys), "hash": hashlib.sha1("\n".join(keys).encode()).hexdigest()[:12]}

@@ -12,12 +12,14 @@ Notebook: smh_diagnostics.ipynb.
     SD.time_offset(smh_dir, d)          # first vitals row against inTime: is inTime local time and the chart time UTC?
     SD.medication_versions(smh_dir)     # medications, medications_furosemide, medications_v2
     SD.drug_coverage_by_year(smh_dir, manifest)   # share of eligible stays with drug rows, by admission year
+    SD.duplicate_pattern(smh_dir, manifest, "ai_picu_io.csv")   # where the exact duplicate rows sit (assembly removes them)
 """
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+import assemble as A
 import diagnostics as D
 import inventory as I
 
@@ -135,3 +137,55 @@ def drug_coverage_by_year(smh_dir, manifest, files=DRUG_FILES):
         df, _ = I.read(_dir(smh_dir) / f, usecols=lambda c: c.lower() == "encounterid")
         keys[f.replace("ai_picu_", "").replace(".csv", "")] = set(df.iloc[:, 0])
     return D.coverage_by_year(manifest, keys, key_col="encounterId")
+
+
+def duplicate_pattern(smh_dir, manifest, file="ai_picu_io.csv", chunksize=1_000_000):
+    """Assembly drops rows that are identical in every column. Are they extraction copies or real repeats?
+    For the rows of manifest stays in one SMH table (rows are read as text, as in assembly), counts:
+      - how many rows are copies of an earlier row, and how many copies a row has;
+      - the distance in file rows from each copy to the identical row before it (next to it in the file, or
+        far away: copies made by the extraction usually sit together);
+      - how many encounters have any copy, and the share of copies per encounter;
+      - copies per 1,000 rows by admission year (a change at one date points to the extraction).
+    Counts only. The number of copies should equal 'exact duplicates removed' in the assembly log."""
+    path = _dir(smh_dir) / file
+    keep_ids = set(A._norm_key(manifest["encounterId"]).dropna())
+    year = dict(zip(A._norm_key(manifest["encounterId"]), pd.to_numeric(manifest["year"], errors="coerce")))
+    hs, pos, enc = [], [], []
+    start = 0
+    for chunk in A._chunks(path, chunksize):
+        col = "encounterId" if "encounterId" in chunk.columns else "encounterID"
+        key = A._norm_key(chunk[col])
+        sub = chunk[key.isin(keep_ids)]
+        hs.append(A._hash(sub))
+        pos.append(start + np.flatnonzero(key.isin(keep_ids).to_numpy()))
+        enc.append(key[sub.index].to_numpy())
+        start += len(chunk)
+    df = pd.DataFrame({"h": np.concatenate(hs), "pos": np.concatenate(pos), "enc": np.concatenate(enc)})
+    df["copy"] = df.duplicated("h")
+    df["gap"] = df["pos"] - df.groupby("h")["pos"].shift()
+    n_copies = df.groupby("h").size()
+    overview = pd.Series({
+        "rows of manifest stays": len(df), "distinct rows": int(df["h"].nunique()),
+        "copies (rows identical to an earlier row)": int(df["copy"].sum()),
+        "distinct rows that have a copy": int((n_copies > 1).sum()),
+        "share of rows that are copies": round(float(df["copy"].mean()), 3)}, dtype=object).to_frame("rows")
+    per_row = n_copies.clip(upper=4).astype(str).replace({"4": "4+"}).value_counts().sort_index().rename("distinct rows")
+    per_row.index = [f"{i} time" + ("" if i == "1" else "s") + " in the file" for i in per_row.index]
+    g = df.loc[df["copy"], "gap"]
+    gaps = pd.cut(g, [0, 1, 10, 1000, 100000, np.inf], labels=["next row", "2 to 10 rows back", "11 to 1,000 rows back",
+                                                              "1,001 to 100,000 rows back", "over 100,000 rows back"])
+    gap_table = gaps.value_counts().reindex(gaps.cat.categories).rename("copies").to_frame()
+    e = df.groupby("enc")["copy"].agg(rows="size", copies="sum")
+    e["share"] = e["copies"] / e["rows"]
+    per_enc = pd.Series({
+        "with rows in the table": len(e), "with at least one copy": int((e["copies"] > 0).sum()),
+        "median share of copies (those with any)": round(float(e.loc[e["copies"] > 0, "share"].median()), 3),
+        "90th percentile of that share": round(float(e.loc[e["copies"] > 0, "share"].quantile(0.9)), 3),
+        "highest share": round(float(e["share"].max()), 3)}, dtype=object).to_frame("encounters")
+    df["year"] = df["enc"].map(year)
+    by_year = df.groupby("year")["copy"].agg(rows="size", copies="sum")
+    by_year["copies per 1,000 rows"] = (1000 * by_year["copies"] / by_year["rows"]).round(1)
+    return {"Copies": overview, "Times each distinct row appears": per_row.to_frame(),
+            "Distance to the identical row before it": gap_table, "Encounters affected": per_enc,
+            "By admission year": by_year}

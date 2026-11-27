@@ -11,12 +11,15 @@ question that the manifest (step 3) relies on, and returns a small table. Notebo
     RD.empty_studies(d)                          # studyIDs with no timestamped vitals, by prefix and year
     RD.placeholder_rows(d)                       # why: one row with an empty chartTime per such studyID
     RD.picanet_versions(rbh_dir, d)              # new vs old PICANet at stay level (diagnostics.compare_keys)
+    RD.picanet_old_vs_new(rbh_dir, d)            # could the old PICANet file be combined with the new one?
     RD.prefix_twins(rbh_dir)                     # NIC/NND copies of the same stay, per file
     RD.sedation_twins(rbh_dir)                   # how alike the two copies of a stay are in sedation
     RD.encounter_keys(rbh_dir)                   # the encounterId in the drug tables: is it a stay key?
     RD.vitals_times(d)                           # intv_hr, LOS and ward times against each other
     RD.multi_study_admissions(d)                 # admissions with more than one studyID
     RD.drug_coverage_by_year(rbh_dir, manifest)  # share of eligible stays with drug rows, by admission year
+    RD.drug_by_year(rbh_dir, manifest)           # which drugs, per year, in one drug table
+    RD.rows_by_month(rbh_dir, file)              # the month a table changes
 """
 from pathlib import Path
 
@@ -124,6 +127,47 @@ def picanet_versions(rbh_dir, d):
                           year_of=_years)
 
 
+PIC_COLS = ["AgeDays", "Gender", "Weight", "AdDateTime", "UnitDisDateTime", "LOSHours", "PrimaryDiagnosisGroup",
+            "PIM3", "VentilationStatus", "InTubeDays", "TrachDays", "EventID"]
+
+
+def picanet_old_vs_new(rbh_dir, d):
+    """Could the old PICANet file be combined with the new one? Two questions, counts only.
+    1. For stays in both files: per column, how often both are filled and equal, both filled and different, or
+       only one is filled (a stay is the studyID with the prefix removed; its rows are combined, first filled value).
+    2. For stays in the old file only (and in demographics): how many carry any PICANet content at all, against
+       the same measure for stays in both. An empty row is a stay that PICANet lists but has no audit data for."""
+    rbh_dir = _dir(rbh_dir)
+
+    def stays(f):
+        x, _ = I.read(rbh_dir / f)
+        x["stay"] = _stay(x["studyID"])
+        return x.groupby("stay")[PIC_COLS].first()
+    new, old = stays(PIC_NEW), stays(PIC_OLD)
+    both = new.index.intersection(old.index)
+    rows = []
+    for c in PIC_COLS:
+        a, b = new.loc[both, c], old.loc[both, c]
+        if pd.api.types.is_numeric_dtype(a) and pd.api.types.is_numeric_dtype(b):
+            same = (a - b).abs() < 1e-6
+        else:
+            same = a.astype(str) == b.astype(str)
+        both_f = a.notna() & b.notna()
+        rows.append({"column": c, "both filled, equal": int((both_f & same).sum()),
+                     "both filled, different": int((both_f & ~same).sum()),
+                     "only new filled": int((a.notna() & b.isna()).sum()),
+                     "only old filled": int((a.isna() & b.notna()).sum())})
+    coh = set(_stay(d["demo"]["studyID"]))
+    old_only = old.index.difference(new.index).intersection(list(coh))
+    has = old[PIC_COLS].notna().any(axis=1)
+    content = pd.DataFrame({"stays": [len(both), len(old_only)],
+                            "with any PICANet content": [int(has.loc[both].sum()), int(has.loc[old_only].sum())],
+                            "with PIM3": [int(old.loc[both, "PIM3"].notna().sum()),
+                                          int(old.loc[old_only, "PIM3"].notna().sum())]},
+                           index=["in both files (old file's values)", "old only, in demographics"])
+    return {"agreement on stays in both files": pd.DataFrame(rows), "content of old-only stays": content}
+
+
 def prefix_twins(rbh_dir):
     """Per file: studyIDs, distinct stays, and stays that appear under both prefixes (NIC and NND)."""
     rbh_dir, rows = _dir(rbh_dir), []
@@ -219,3 +263,18 @@ def drug_coverage_by_year(rbh_dir, manifest, files=DRUG_FILES):
             set(_stay(I.read(_dir(rbh_dir) / f, usecols=["studyID"])[0]["studyID"].drop_duplicates()))
             for f in files}
     return D.coverage_by_year(manifest, keys)
+
+
+def drug_by_year(rbh_dir, manifest, file="ai_picu_infusion.csv"):
+    """Eligible stays with at least one row of each drug in `file`, by admission year (drug names are labels,
+    not patient data). Shows which drugs vanish when a table thins out."""
+    df = I.read(_dir(rbh_dir) / file, usecols=["studyID", "Drug"])[0].drop_duplicates()
+    df["stay_key"] = _stay(df["studyID"])
+    df = df.merge(manifest[["stay_key", "year"]], on="stay_key").drop_duplicates(["stay_key", "Drug"])
+    return df.groupby(["year", "Drug"]).size().unstack(fill_value=0)
+
+
+def rows_by_month(rbh_dir, file="ai_picu_infusion.csv", start="2018-06", end="2019-12"):
+    """Rows per calendar month of chartTime between start and end: finds the month a table changes."""
+    t = I.parse_dates(I.read(_dir(rbh_dir) / file, usecols=["chartTime"])[0]["chartTime"])[0].dropna()
+    return t.dt.to_period("M").value_counts().sort_index().loc[start:end].to_frame("rows")

@@ -49,7 +49,10 @@ def coverage_by_year(manifest, key_sets, key_col="stay_key", year_col="year"):
 
 def show(tables):
     """Display a table, or a dict of named tables, in a notebook."""
-    from IPython.display import display
+    try:
+        from IPython.display import display
+    except ImportError:      # outside a notebook
+        display = print
     for name, t in (tables.items() if isinstance(tables, dict) else [(None, tables)]):
         if name:
             print(name)
@@ -67,3 +70,71 @@ def write_report(tables, path, title="Diagnostics"):
             parts += [I.df_text(df), ""]
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text("\n".join(parts) + "\n")
+
+
+def rows_by_month(path, time_col, start=None, end=None):
+    """Rows per calendar month of `time_col` in one file (CSV or parquet), optionally between start and end
+    ("2014-01", "2015-06"). Months with no rows are shown as 0, so a gap is visible. Finds the month a table
+    changes or stops."""
+    t = I.parse_dates(I.read(path, usecols=[time_col])[0][time_col])[0].dropna()
+    s = t.dt.to_period("M").value_counts().sort_index()
+    s = s.reindex(pd.period_range(s.index.min(), s.index.max(), freq="M"), fill_value=0)
+    return s.loc[start:end].to_frame("rows")
+
+
+class Log:
+    """Collects what a notebook prints (and any table added) into one Markdown report, while still showing it.
+    For modules that print their counts (gosh_links.py) rather than return tables. Counts only: use it only
+    around functions that print counts.
+
+        log = D.Log()
+        with log("1. How the IDs link"):
+            links = GL.check_links(...)          # prints as usual, and is kept
+        log.add("2. Rows by month", D.rows_by_month(...))
+        log.write(reports_dir / "GOSH_diagnostics_<date>.md", title="GOSH diagnostics")
+    """
+
+    class _Tee:
+        def __init__(self, *streams):
+            self.streams = streams
+
+        def write(self, s):
+            for st in self.streams:
+                st.write(s)
+            return len(s)
+
+        def flush(self):
+            for st in self.streams:
+                st.flush()
+
+    def __init__(self):
+        self.sections = []
+
+    def __call__(self, name):
+        import contextlib
+        import io
+        import sys
+        log, buf = self, io.StringIO()
+
+        @contextlib.contextmanager
+        def _ctx():
+            with contextlib.redirect_stdout(log._Tee(sys.stdout, buf)):
+                try:
+                    yield
+                finally:
+                    log.sections.append((name, "```\n" + buf.getvalue().rstrip() + "\n```"))
+        return _ctx()
+
+    def add(self, name, table):
+        """Add a table (or dict of tables) under a heading, and display it."""
+        show(table)
+        self.sections.append((name, "\n\n".join(
+            (f"### {k}\n\n" if k else "") + I.df_text(v)
+            for k, v in (table.items() if isinstance(table, dict) else [(None, table)]))))
+
+    def write(self, path, title="Diagnostics"):
+        parts = [f"# {title}", f"Generated {date.today()}", ""]
+        for name, text in self.sections:
+            parts += [f"## {name}", "", text, ""]
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text("\n".join(parts) + "\n")

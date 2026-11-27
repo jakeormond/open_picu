@@ -327,3 +327,116 @@ def per_stay_conflicts(parquet_path, key):
     print(f"  stays with more than one row: {len(multi):,}; columns that differ between their rows:")
     print(I.df_text(pd.DataFrame(rows).sort_values("stays where it differs", ascending=False), index=False)
           if rows else "  none (rows differ only in missing values)")
+
+
+# ---------------------------------------------------------------- counts from the files already written
+def parquet_counts(out_dir, site=None):
+    """Rows and columns of every assembled parquet, read from the file metadata only (no row is loaded, so
+    it takes seconds). Use it to record what is on disk now and to compare with a later rebuild.
+    site=None reads every site folder under out_dir. Counts only."""
+    out_dir = Path(out_dir).expanduser()
+    sites = [site.upper()] if site else sorted(p.name for p in out_dir.iterdir() if p.is_dir())
+    rows = []
+    for s in sites:
+        for p in sorted((out_dir / s).glob("*.parquet")):
+            md = pq.ParquetFile(p).metadata
+            rows.append({"site": s, "table": p.stem, "rows": md.num_rows, "columns": md.num_columns})
+    return pd.DataFrame(rows)
+
+
+def compare_counts(before, after):
+    """Compare two parquet_counts tables table by table. Columns: rows/columns before and after and `same`;
+    a table present in only one is shown with the other side missing."""
+    m = before.merge(after, on=["site", "table"], how="outer", suffixes=(" before", " after"))
+    m["same"] = (m["rows before"] == m["rows after"]) & (m["columns before"] == m["columns after"])
+    return m
+
+
+# ---------------------------------------------------------------- run once, then load the saved log
+_CORE = ("_norm_key", "_files", "_key_columns", "_tcol", "_make_filter", "_hash", "_new",
+         "_assemble_table", "_assemble_gosh_picanet", "assemble_site")
+_MANIFEST_KEY = {"RBH": "stay_key", "SMH": "encounterId", "GOSH": "stay_id"}
+
+
+def code_fingerprint():
+    """Short hash of the source of the functions that decide what an assembled file contains. It changes if
+    their code changes (a comment too), so a log written under older code can be recognised."""
+    import hashlib
+    import inspect
+    src = "".join(inspect.getsource(globals()[n]) for n in _CORE)
+    return hashlib.sha1(src.encode()).hexdigest()[:12]
+
+
+def _provenance(site, manifest, kwargs):
+    import json
+    fp = M.fingerprint(manifest, _MANIFEST_KEY[site.upper()])
+    settings = {k: kwargs[k] for k in sorted(kwargs) if k in ("include", "exclude", "time_cols", "gosh_pre_hours")}
+    return {"site": site.upper(), "manifest_stays": fp["stays"], "manifest_hash": fp["hash"],
+            "code_hash": code_fingerprint(), "settings": json.loads(json.dumps(settings, default=str))}
+
+
+def write_provenance(site, manifest, log_path, **kwargs):
+    """Record what a log was made from (manifest fingerprint, assembly code, settings) next to it, as
+    <log>.json. Call it once for a log whose files you have verified by a rebuild, so later runs can check."""
+    import json
+    p = Path(log_path).expanduser().with_suffix(".json")
+    p.write_text(json.dumps(_provenance(site, manifest, kwargs), indent=1))
+    return p
+
+
+def assemble_or_load(site, src_dir, out_dir, manifest, log_path, rebuild=False, **kwargs):
+    """Assemble a site and save its counts-only log plus a provenance file, or, when the log already exists
+    and rebuild is False, load it after checking that it was made from the same manifest, code and settings
+    (raises if not: the files are stale, rerun with rebuild=True). assemble_site skips tables that already
+    have an output file and then returns an empty log, so a plain rerun of a finished site would lose its
+    log; this keeps the log with the data. rebuild=True rewrites every parquet of the site. kwargs go to
+    assemble_site (include, exclude, time_cols, ...). Refuses to guess when outputs exist but the log does not."""
+    import json
+    log_path = Path(log_path).expanduser()
+    if log_path.exists() and not rebuild:
+        prov = log_path.with_suffix(".json")
+        if prov.exists():
+            then, now = json.loads(prov.read_text()), _provenance(site, manifest, kwargs)
+            diff = [k for k in ("manifest_hash", "code_hash", "settings") if then.get(k) != now[k]]
+            if diff:
+                raise RuntimeError(f"{site}: the saved log was made from a different {', '.join(diff)}. "
+                                   f"The assembled files are stale: rerun with rebuild=True.")
+            print(f"{site}: not rebuilt; loaded {log_path.name} (manifest, code and settings match the run that made it)")
+        else:
+            print(f"{site}: not rebuilt; loaded {log_path.name}. WARNING: no provenance recorded, so it cannot be "
+                  f"checked against the current manifest and code (write_provenance records it).")
+        return pd.read_csv(log_path)
+    site_dir = Path(out_dir).expanduser() / site.upper()
+    if not rebuild and site_dir.exists() and any(site_dir.glob("*.parquet")):
+        raise FileNotFoundError(f"{site}: assembled files exist but {log_path} does not. Put the saved log "
+                                f"there, or set rebuild=True to rewrite the site (and its log).")
+    log = assemble_site(site, src_dir, out_dir, manifest, overwrite=rebuild, **kwargs)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log.to_csv(log_path, index=False)
+    write_provenance(site, manifest, log_path, **kwargs)
+    return log
+
+
+def log_vs_disk(log, counts, site):
+    """Rows written according to the log against rows in the parquet file of each table (from
+    parquet_counts). Returns one row per table with `same`; a table in only one of them is shown."""
+    def stem(t):
+        return "PICANet_eprweights" if t.startswith("PICANet_ALL") else t.replace("/", "__").removesuffix(".csv")
+    a = log.assign(table=log["table"].map(stem))[["table", "rows written"]]
+    b = counts[counts["site"] == site.upper()][["table", "rows"]]
+    m = a.merge(b, on="table", how="outer")
+    m["same"] = m["rows written"] == m["rows"]
+    return m
+
+
+def file_times(paths):
+    """Last-modified time of each file (or of each file in a folder's *.parquet), as a table. Use it to see
+    which outputs are older than their inputs. A copy or a save changes the time, so read it as a hint and
+    confirm with counts or fingerprints."""
+    rows = []
+    for p in map(Path, paths):
+        p = p.expanduser()
+        for f in (sorted(p.glob("*.parquet")) if p.is_dir() else [p]):
+            rows.append({"file": f.name, "folder": f.parent.name,
+                         "modified": pd.Timestamp(f.stat().st_mtime, unit="s").round("s")})
+    return pd.DataFrame(rows)

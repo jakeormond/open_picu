@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import diagnostics as D
 import inventory as I
 
 
@@ -400,3 +401,29 @@ def compare_status(gosh_dir, picanet, archived, tol_hours=24):
     print(t.groupby("admissions per patient")["disagree"].agg(["size", "sum"]).rename(
         columns={"size": "admissions", "sum": "status differs"}).to_string())
     return j[["project_id", "_s", "_rank_from_end"]].assign(dead_main=dead_m, dead_arch=dead_a)
+
+
+# ---- lab coverage by admission year ---------------------------------------------------
+def lab_coverage_by_year(gosh_dir, manifest, folder="merged_lab_values", files=None,
+                         time_col="observation_datetime", pre_hours=0):
+    """Share of the eligible GOSH stays (manifest from manifest.gosh_manifest) that have at least one row in
+    each lab file, by admission year, plus a column 'any lab file'. Rows are attached to stays by patient and
+    time (manifest.gosh_eligible_rows). files: names inside `folder`; default every CSV there that has
+    project_id and the time column. Returns years as the index; counts and shares only."""
+    import manifest as M
+    d = Path(gosh_dir) / folder
+    names = files or sorted(p.name for p in d.glob("*.csv"))
+    keys, skipped = {}, []
+    for n in names:
+        try:
+            h, _ = I.read(d / n, usecols=["project_id", time_col])
+        except ValueError:                       # a column is missing in this file
+            skipped.append(n)
+            continue
+        e = M.gosh_eligible_rows(h, manifest, time_col=time_col, pre_hours=pre_hours)
+        keys[n.replace(".csv", "").replace("merged_", "")] = set(e["stay_id"])
+        del h, e
+    if skipped:
+        print(f"skipped (no project_id or {time_col}): {len(skipped)} files: {skipped}")
+    keys["any lab file"] = set().union(*keys.values()) if keys else set()
+    return D.coverage_by_year(manifest, keys, key_col="stay_id")
