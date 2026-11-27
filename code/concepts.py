@@ -1193,3 +1193,135 @@ def gosh_unitless_by_drug(assembled_dir, table=None, label_col="shortLabel", val
     res = res[res["stays"] >= min_stays].sort_values("stays", ascending=False).head(top)
     print(res.to_string(index=False))
     return res
+
+
+# ======================================================================================================
+# Concept presence workbook: which concepts each site has a source for, and (optionally) which are released.
+# ======================================================================================================
+DERIVED = {   # concepts made by harmonise.py that are not in CONCEPTS: group, sites that have a source, note
+    "intake_iv": {"group": "fluids", "sites": ("RBH", "SMH"),
+                  "note": "Derived fluid concept (harmonise.py), not in the concept map; no GOSH source (FLUIDS.md)"},
+}
+GROUP_ORDER = ["vitals", "vent", "blood gas", "lab", "fluids", "drugs"]
+
+
+def presence_table(release=None, derived=DERIVED):
+    """One row per concept: 1 if the site has a mapped source for it, 0 if not (the mapping, not a count of stays).
+    release (optional) adds the columns for a released level, as a dict:
+        drop    concepts the level removes (its config's drop_concepts)
+        rename  concepts the level renames or merges, old -> new (its config's rename_concepts)
+        by_hand {concept: reason} for concepts dropped for a reason other than the number of sites
+    'In release' is 1 for every concept not in `drop`; 'Released as' is its name in the release; the reason for a drop is
+    the `by_hand` entry, else read from the number of sites that have the concept."""
+    rows = []
+    for name, c in CONCEPTS.items():
+        rows.append({"Concept": name, "Group": c["group"], **{s: int(bool(c[s])) for s in SITES}, "note": c["note"] or None})
+    for name, d in derived.items():
+        rows.append({"Concept": name, "Group": d["group"], **{s: int(s in d["sites"]) for s in SITES}, "note": d["note"]})
+    t = pd.DataFrame(rows)
+    t["_g"] = t["Group"].map({g: i for i, g in enumerate(GROUP_ORDER)}).fillna(len(GROUP_ORDER))
+    t = t.sort_values(["_g", "Concept"]).drop(columns="_g").reset_index(drop=True)
+    t["Sites with the concept"] = t[list(SITES)].sum(axis=1)
+    if release is not None:
+        drop, rename, by_hand = set(release["drop"]), release.get("rename", {}), release.get("by_hand", {})
+        t["In release (1/0)"] = (~t["Concept"].isin(drop)).astype(int)
+        t["Released as"] = [rename.get(c, c) if k else None for c, k in zip(t["Concept"], t["In release (1/0)"])]
+        word = {1: "one site only", 2: "two sites only"}
+
+        def why(c, n, k):
+            if k:
+                return None
+            if c in by_hand:
+                return by_hand[c]
+            return f"recorded at {word[n]}" if n in word else "not usable at all three sites (mapped at three, see note)"
+        t["Why not in release"] = [why(c, n, k) for c, n, k in zip(t["Concept"], t["Sites with the concept"], t["In release (1/0)"])]
+    t = t.rename(columns={"note": "Note from the concept map"})
+    first = ["Concept", "Group", *SITES, "Sites with the concept"]
+    last = ["Note from the concept map"]
+    return t[first + [c for c in t.columns if c not in first + last] + last]
+
+
+def write_presence_workbook(path, release=None, level=None, checked=None, derived=DERIVED):
+    """Excel file with the concept presence table (sheet 'Concepts') and a 'Read me' sheet with the counts as formulas.
+    level and checked (free text, for example the level name and the date of release_manifest) go into the Read me."""
+    t = presence_table(release, derived)
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter as L
+    except ImportError:          # the SDE has no openpyxl: write the same table as a CSV instead
+        csv = Path(path).with_suffix(".csv")
+        csv.parent.mkdir(parents=True, exist_ok=True)
+        t.to_csv(csv, index=False)
+        print(f"openpyxl is not installed: wrote {csv.name} instead of an Excel file (the same table, without formulas or colours)")
+        return t
+    n = len(t)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Concepts"
+    cols = list(t.columns)
+    # formulas for the site count, and 1/0 fills
+    green, red = PatternFill("solid", fgColor="DCEFE0"), PatternFill("solid", fgColor="F6DADA")
+    ws.append(cols)
+    for i, r in enumerate(t.itertuples(index=False), start=2):
+        row = list(r)
+        row[cols.index("Sites with the concept")] = f"=SUM(C{i}:E{i})"
+        ws.append([None if (isinstance(v, float) and pd.isna(v)) else v for v in row])
+    head = PatternFill("solid", fgColor="1F3A5F")
+    for c in ws[1]:
+        c.fill, c.font = head, Font(bold=True, color="FFFFFF")
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[1].height = 32
+    flag_cols = [cols.index(x) + 1 for x in list(SITES) + ["In release (1/0)"] if x in cols]
+    for r in range(2, n + 2):
+        for ci in flag_cols:
+            c = ws.cell(r, ci)
+            c.fill = green if c.value == 1 else red
+            c.alignment = Alignment(horizontal="center")
+        ws.cell(r, cols.index("Sites with the concept") + 1).alignment = Alignment(horizontal="center")
+        ws.cell(r, len(cols)).alignment = Alignment(wrap_text=True, vertical="top")
+    widths = {"Concept": 26, "Group": 11, "RBH": 7, "SMH": 7, "GOSH": 7, "Sites with the concept": 13, "In release (1/0)": 13,
+              "Released as": 16, "Why not in release": 40, "Note from the concept map": 70}
+    for i, name in enumerate(cols, start=1):
+        ws.column_dimensions[L(i)].width = widths.get(name, 14)
+    ws.freeze_panes = "C2"
+    ws.auto_filter.ref = f"A1:{L(len(cols))}{n + 1}"
+
+    rm = wb.create_sheet("Read me")
+    lines = [("Concept presence by site", True),
+             ("Source: the concept map in concepts.py (CONCEPTS). 1 = the site has a mapped source for the concept; 0 = it has none. "
+              "This is the mapping, not a count of stays: a concept with a source can still be empty for some years or stays "
+              "(for example GOSH Epic-era gaps, see GOSH_EPIC_ERA.md). "
+              + (" ".join(f"{k} is added by hand: it is a derived {v['group']} concept (harmonise.py) with "
+                          f"{' and '.join(v['sites'])} sources and none at the other sites." for k, v in derived.items())), False)]
+    if release is not None:
+        lines.append((f"In release: the level {level or ''} ('Not in release' = in the level's drop_concepts). Concepts renamed in the level are "
+                      f"shown under their released name ('Released as'): "
+                      + ", ".join(f"{a} as {b}" for a, b in release.get("rename", {}).items())
+                      + ". The reason is read from the concept map's site count, except the ones given by hand: "
+                      + "; ".join(sorted(set(release.get("by_hand", {}).values()))) + ".", False))
+        if checked:
+            lines.append((checked, False))
+    for i, (txt, bold) in enumerate(lines, start=1):
+        c = rm.cell(i, 1, txt)
+        c.font, c.alignment = Font(bold=bold), Alignment(wrap_text=True, vertical="top")
+    rm.column_dimensions["A"].width, rm.column_dimensions["B"].width = 70, 12
+    r0 = len(lines) + 2
+    rm.cell(r0, 1, "Counts (formulas on the Concepts sheet)").font = Font(bold=True)
+    last, sc, gc = n + 1, L(cols.index("Sites with the concept") + 1), "B"
+    items = [("Concepts in the map", f"=COUNTA(Concepts!$A$2:$A${last})"),
+             ("  measured (not drugs)", f'=COUNTIF(Concepts!$B$2:$B${last},"<>drugs")'),
+             ("  drugs", f'=COUNTIF(Concepts!$B$2:$B${last},"drugs")'),
+             ("At all 3 sites", f"=COUNTIF(Concepts!${sc}$2:${sc}${last},3)"),
+             ("At 2 sites", f"=COUNTIF(Concepts!${sc}$2:${sc}${last},2)"),
+             ("At 1 site", f"=COUNTIF(Concepts!${sc}$2:${sc}${last},1)")]
+    if release is not None:
+        rc = L(cols.index("In release (1/0)") + 1)
+        items += [("In release", f"=SUM(Concepts!${rc}$2:${rc}${last})"),
+                  ("Not in release", f"=COUNTIF(Concepts!${rc}$2:${rc}${last},0)")]
+    for i, (a, f) in enumerate(items, start=r0 + 1):
+        rm.cell(i, 1, a)
+        rm.cell(i, 2, f)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return t

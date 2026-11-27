@@ -785,7 +785,7 @@ def distribution_check(harmonised_dir, sites=C.SITES, concepts=None, min_stays=1
     rows = []
     for site in sites:
         for f in sorted(harmonised_dir.glob(f"{site}_*.parquet")):
-            if f.stem.endswith("_rejected"):
+            if f.stem.endswith(("_rejected", "_drugs")):      # the drug files have no flag column (unit and kind instead)
                 continue
             d = pd.read_parquet(f, columns=["stay_key", "concept", "value", "flag", "source"])
             d = d[d["value"].notna()]
