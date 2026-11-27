@@ -1,18 +1,21 @@
 """Stay-level (static) tables: one row per stay, one schema across sites.
 
-Step 1 (this file so far): describe the columns of the assembled static tables, so the column
-mapping between sites is written from what is really there. Counts only; category counts under
-10 are shown as '<10'.
+Stay-level (static) tables, built from the assembled parquet files. Counts only in anything printed;
+category counts under 10 are shown as '<10'.
 
-Notebook use:
+Notebook use (static.ipynb):
     import static as S
-    S.describe_columns(out_dir / "RBH" / "ai_picu_piccanet.parquet")
+    S.describe_columns(out_dir / "RBH" / "ai_picu_piccanet.parquet")   # what is really in a table
+    static = S.build_all(out_dir)                                       # {'RBH','SMH','GOSH'}
+    pooled = S.pool(static)
+    S.compare_with_baseline(static, pooled, baseline)                   # same stays as the saved tables?
 """
 from pathlib import Path
 
 import pandas as pd
 
 import inventory as I
+import manifest as M
 
 SMALL = 10
 MAX_CATS = 8
@@ -52,7 +55,10 @@ def describe_columns(path):
 #   - died: RBH picuMortality, SMH isDeceased (outcomes tables), GOSH UnitDisStatusDescription.
 #   - Stays with two PICANet rows (after exact duplicates are gone) are excluded, since the rows
 #     disagree on admission or discharge.
-#   - Ethnicity: PICANet only. The demographics vocabularies differ and are kept as x_ columns.
+#   - Ethnicity: PICANet first ('Unknown' folded into 'Not stated'). RBH only: where PICANet says Not stated or
+#     has no record, the demographics ethnicity is mapped to PICANet's categories (RBH_ETHNICITY_MAP) and used;
+#     ethnicity_source records which. SMH and GOSH are PICANet only. The raw demographics value is kept as an
+#     x_ column. Ethnicity is not released, so this does not enter the anonymisation.
 #   - Free text (SecDescriptions, EthnicOther, primaryDiagnosis) is not carried into this table.
 #   - Site-specific fields keep an x_ prefix; they are not part of the pooled schema.
 # ======================================================================================
@@ -299,3 +305,82 @@ def pim_by_year(static):
         print(f"{site} (version recorded: {df['pim_version'].iloc[0]})")
         print(I.df_text(t, index=True))
         print()
+
+
+def stay_fingerprint(df):
+    """Number of stays and a 12-character hash of the stays, each identified by patient and admission time
+    (older saved static tables have no stay_key column, so patient_id|t0 is used for both old and new)."""
+    k = pd.DataFrame({"k": df["patient_id"].astype(str) + "|" + df["t0"].astype(str)})
+    return M.fingerprint(k, "k")
+
+
+def compare_with_baseline(static, pooled, baseline):
+    """Rebuilt tables against the baseline table (columns: table, rows, columns, fingerprint, column names).
+    One row per table: same stays?, same fingerprint?, and which columns were added or removed."""
+    new = {**static, "pooled": pooled}
+    base = baseline.set_index("table")
+    rows = []
+    for name, df in new.items():
+        b = base.loc[name]
+        old_cols = str(b["column names"]).split("; ")
+        fp = stay_fingerprint(df)
+        rows.append({"table": name, "rows before": int(b["rows"]), "rows now": len(df),
+                     "same rows": int(b["rows"]) == len(df),
+                     "fingerprint before": b["fingerprint"], "fingerprint now": fp["hash"],
+                     "same stays": b["fingerprint"] == fp["hash"],
+                     "columns added": ", ".join(c for c in df.columns if c not in old_cols) or "-",
+                     "columns removed": ", ".join(c for c in old_cols if c not in df.columns) or "-"})
+    return pd.DataFrame(rows)
+
+
+def compare_values(static, pooled, static_dir):
+    """Cell by cell against the saved static tables, for the columns both have. Stays are matched on
+    patient_id|t0. Counts only: per table and column, how many cells differ, and of those how many were
+    missing before and are filled now (or the reverse). Numbers are compared to 1e-9."""
+    new = {**static, "pooled": pooled}
+    rows = []
+    for name, df in new.items():
+        old = pd.read_parquet(Path(static_dir) / f"{name}_static.parquet")
+        for d in (old, df):
+            d.index = d["patient_id"].astype(str) + "|" + d["t0"].astype(str)
+        old = old[~old.index.duplicated()]
+        cur = df[~df.index.duplicated()].reindex(old.index)
+        for c in [c for c in old.columns if c in cur.columns and c not in ("patient_id", "t0")]:
+            a, b = old[c], cur[c]
+            if pd.api.types.is_numeric_dtype(a) and pd.api.types.is_numeric_dtype(b):
+                same = (a.astype("float64") - b.astype("float64")).abs().le(1e-9).fillna(False).astype(bool) | (a.isna() & b.isna())
+            else:
+                same = (a.astype("string") == b.astype("string")).fillna(False).astype(bool) | (a.isna() & b.isna())
+            diff = ~same
+            rows.append({"table": name, "column": c, "cells differing": int(diff.sum()),
+                         "missing before, filled now": int((diff & a.isna() & b.notna()).sum()),
+                         "filled before, missing now": int((diff & a.notna() & b.isna()).sum())})
+    t = pd.DataFrame(rows)
+    return t[t["cells differing"] > 0].reset_index(drop=True) if (t["cells differing"] > 0).any() else t.head(0)
+
+
+def column_changes(static, static_dir, site, col="ethnicity"):
+    """Which old value became which new value for one column of one site's saved table. Counts only;
+    counts under 10 are shown as '<10'. Only rows whose value changed."""
+    old = pd.read_parquet(Path(static_dir) / f"{site}_static.parquet")
+    new = static[site]
+    key = lambda d: d["patient_id"].astype(str) + "|" + d["t0"].astype(str)
+    o = pd.Series(old[col].astype("string").values, index=key(old))
+    n = pd.Series(new[col].astype("string").values, index=key(new))
+    o, n = o[~o.index.duplicated()], n[~n.index.duplicated()].reindex(o.index)
+    t = pd.DataFrame({"before": o.fillna("(missing)"), "now": n.fillna("(missing)")})
+    t = t[t["before"] != t["now"]].value_counts().rename("stays").reset_index()
+    t["stays"] = t["stays"].map(lambda v: "<10" if v < SMALL else str(v))
+    return t
+
+
+def short_stays(static, hours=6):
+    """Stays with a length of stay of `hours` or less, by site: count, share and stays with a length of stay.
+    Short stays are the ones that cannot have many hourly rows, so this is the size of that group."""
+    rows = []
+    for site, df in static.items():
+        los = df["los_hours"].dropna()
+        n = int((los <= hours).sum())
+        rows.append({"site": site, f"stays with LOS <= {hours} h": n if n >= SMALL else "<10",
+                     "share": round(n / max(len(los), 1), 3), "stays with a LOS": len(los)})
+    return pd.DataFrame(rows).set_index("site")

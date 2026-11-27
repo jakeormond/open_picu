@@ -364,3 +364,39 @@ def describe_ids(assembled_dir, table, ids, value_col, top=8, min_count=10):
         txt = txt[txt >= min_count].head(top)
         if len(txt):
             print("  most common text values: " + "; ".join(f"{k!r}: {v:,}" for k, v in txt.items()))
+
+
+def coverage_tables(assembled_dir, tables=DEFAULT_TABLES, baseline=None, top=15):
+    """Same check as check_coverage, but returned as tables (for the report) instead of printed.
+    Returns {"Summary": one row per table, "Unmapped IDs": one row per unmapped ID with rows and stays,
+    "Concepts, <table>": rows and stays per concept}. Counts and measurement codes only.
+    `baseline` (the assembled counts baseline, columns site, table, rows) adds a check that the table has the
+    number of rows recorded at assembly."""
+    base = Path(assembled_dir) / "SMH"
+    summary, unmapped, out = [], [], {}
+    for t in tables:
+        path = _path(base, t)
+        keys = KEY.get(t, ("interventionId",))
+        df = pd.read_parquet(path, columns=_cols(path, ("encounterId",) + keys))
+        df.columns = ["stay"] + list(keys)
+        ids = df[keys[0]].astype("string").str.strip()
+        for k in keys[1:]:
+            ids = ids + "_" + df[k].astype("string").str.strip()
+        rev = {i: c for c, v in MAPPINGS[t].items() for i in v}
+        concept = ids.map(rev)
+        row = {"table": t, "file": path.name, "rows": len(df), "mapped rows": int(concept.notna().sum()),
+               "mapped %": round(100 * concept.notna().mean(), 1), "stays": int(df["stay"].nunique()),
+               "unmapped IDs": int(ids[concept.isna()].nunique()), "unmapped rows": int(concept.isna().sum())}
+        if baseline is not None:
+            exp = baseline[(baseline["site"] == "SMH") & (baseline["table"] == path.stem)]["rows"]
+            row["rows as assembled"] = int(exp.iloc[0]) if len(exp) else None
+            row["same as assembly"] = bool(len(exp) and int(exp.iloc[0]) == len(df))
+        summary.append(row)
+        g = pd.DataFrame({"stay": df["stay"], "id": ids})[concept.isna().to_numpy()].groupby("id")
+        u = pd.DataFrame({"rows": g.size(), "stays": g["stay"].nunique()}).sort_values("rows", ascending=False).head(top)
+        u.insert(0, "table", t)
+        unmapped.append(u.reset_index())
+        gc = pd.DataFrame({"stay": df["stay"], "concept": concept}).dropna(subset=["concept"]).groupby("concept")
+        res = pd.DataFrame({"rows": gc.size(), "stays": gc["stay"].nunique()})
+        out[f"Concepts, {t}"] = res.reindex([c for c in MAPPINGS[t] if c in res.index])
+    return {"Summary": pd.DataFrame(summary), "Unmapped IDs": pd.concat(unmapped, ignore_index=True), **out}
